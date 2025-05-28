@@ -8,197 +8,38 @@ from typing import List, Dict, Optional
 from .excel_utils import num_to_excel_col, get_cell_color
 from .color_detector import hex_to_rgb
 
-def create_excel_visualization_with_pairs(workbook, sheet_name: str, zones: List[Dict] = None, 
-                                         selected_zone: Optional[int] = None, 
-                                         color_palette: Optional[Dict] = None) -> go.Figure:
-    """
-    Visualisation Excel adaptée pour les paires de labels
-    """
-    ws = workbook[sheet_name]
+# Fonction helper pour adapter le format de color_palette
+def create_excel_visualization_pairs(workbook, sheet_name, zones, selected_zone, color_palette):
+    """Adapte le format de color_palette pour la visualisation"""
+    adapted_palette = {
+        'zone_color': color_palette['zone_color'],
+        'zone_name': color_palette['zone_name'],
+        'label_colors': {}
+    }
     
-    # Limiter les dimensions pour la performance
-    max_row = min(ws.max_row, 100)
-    max_col = min(ws.max_column, 26)
+    # Gérer les différents formats possibles
+    if 'label_pairs' in color_palette:
+        # Format avec paires
+        if len(color_palette['label_pairs']) > 0:
+            adapted_palette['label_colors']['h1'] = color_palette['label_pairs'][0]['horizontal']
+            adapted_palette['label_colors']['v1'] = color_palette['label_pairs'][0]['vertical']
+        if len(color_palette['label_pairs']) > 1:
+            adapted_palette['label_colors']['h2'] = color_palette['label_pairs'][1]['horizontal']
+            adapted_palette['label_colors']['v2'] = color_palette['label_pairs'][1]['vertical']
+    elif 'h1_color' in color_palette:
+        # Format direct
+        adapted_palette['h1_color'] = color_palette.get('h1_color')
+        adapted_palette['h2_color'] = color_palette.get('h2_color')
+        adapted_palette['v1_color'] = color_palette.get('v1_color')
+        adapted_palette['v2_color'] = color_palette.get('v2_color')
+        adapted_palette['label_colors'] = {
+            'h1': {'color': color_palette.get('h1_color'), 'name': 'H1'},
+            'h2': {'color': color_palette.get('h2_color'), 'name': 'H2'},
+            'v1': {'color': color_palette.get('v1_color'), 'name': 'V1'},
+            'v2': {'color': color_palette.get('v2_color'), 'name': 'V2'}
+        }
     
-    # Créer les données pour la heatmap
-    z_values = []
-    text_values = []
-    
-    for row in range(1, max_row + 1):
-        row_values = []
-        row_text = []
-        
-        for col in range(1, max_col + 1):
-            cell = ws.cell(row=row, column=col)
-            value = cell.value if cell.value is not None else ""
-            row_text.append(str(value))
-            row_values.append(1)
-        
-        z_values.append(row_values)
-        text_values.append(row_text)
-    
-    # Coordonnées et labels
-    x_labels = [num_to_excel_col(i) for i in range(1, max_col + 1)]
-    y_labels = [str(i) for i in range(1, max_row + 1)]
-    x_coords = list(range(max_col))
-    y_coords = list(range(max_row))
-    
-    # Créer la figure
-    fig = go.Figure()
-    
-    # Ajouter la heatmap de base
-    fig.add_trace(go.Heatmap(
-        z=z_values,
-        x=x_coords,
-        y=y_coords,
-        showscale=False,
-        hoverongaps=False,
-        colorscale=[[0, 'white'], [1, 'white']],
-        text=text_values,
-        texttemplate="%{text}",
-        textfont={"size": 10},
-        customdata=[[f"{x_labels[j]}{y_labels[i]}" for j in range(max_col)] for i in range(max_row)],
-        hovertemplate='Cellule: %{customdata}<br>Valeur: %{text}<extra></extra>'
-    ))
-    
-    # Ajouter les rectangles et annotations
-    shapes = []
-    annotations = []
-    
-    if zones and color_palette:
-        # Créer un mapping des couleurs pour les paires
-        pair_colors = {}
-        if 'label_pairs' in color_palette:
-            for i, pair in enumerate(color_palette['label_pairs']):
-                pair_colors[f'h_{i}'] = pair['horizontal']['color']
-                pair_colors[f'v_{i}'] = pair['vertical']['color']
-        
-        for zone in zones:
-            bounds = zone['bounds']
-            
-            # Vérifier les limites
-            if (bounds['min_row'] > max_row or bounds['min_col'] > max_col or
-                bounds['max_row'] < 1 or bounds['max_col'] < 1):
-                continue
-            
-            # Convertir les coordonnées
-            plot_min_col = bounds['min_col'] - 1
-            plot_max_col = bounds['max_col'] - 1
-            plot_min_row = bounds['min_row'] - 1
-            plot_max_row = bounds['max_row'] - 1
-            
-            # Couleur de la zone
-            zone_hex = color_palette['zone_color']
-            r, g, b = hex_to_rgb(zone_hex)
-            zone_color = f'rgba({r}, {g}, {b}, 0.3)' if zone['id'] != selected_zone else 'rgba(0, 104, 201, 0.5)'
-            
-            # Rectangle de la zone
-            shapes.append(dict(
-                type="rect",
-                x0=plot_min_col - 0.5,
-                y0=plot_min_row - 0.5,
-                x1=plot_max_col + 0.5,
-                y1=plot_max_row + 0.5,
-                line=dict(color=zone_color, width=2),
-                fillcolor=zone_color,
-                layer="below"
-            ))
-            
-            # Annotation de la zone
-            annotations.append(dict(
-                x=plot_min_col,
-                y=plot_min_row,
-                text=f"Zone {zone['id']}",
-                showarrow=False,
-                bgcolor="white",
-                bordercolor="black",
-                borderwidth=1,
-                font=dict(size=10)
-            ))
-            
-            # Ajouter des indicateurs pour les labels avec différenciation par paire
-            for label in zone.get('labels', []):
-                if label['row'] > max_row or label['col'] > max_col:
-                    continue
-                
-                # Déterminer la couleur selon la paire et la direction
-                label_color = '#888888'  # Par défaut
-                
-                if 'pair_id' in label and 'direction' in label:
-                    pair_id = label['pair_id']
-                    direction = label['direction']
-                    
-                    if pair_id < len(color_palette.get('label_pairs', [])):
-                        pair = color_palette['label_pairs'][pair_id]
-                        if direction == 'horizontal':
-                            label_color = pair['horizontal']['color']
-                        else:
-                            label_color = pair['vertical']['color']
-                
-                r, g, b = hex_to_rgb(label_color)
-                
-                # Coordonnées du label
-                plot_label_col = label['col'] - 1
-                plot_label_row = label['row'] - 1
-                
-                # Style différent selon la direction
-                if label.get('direction') == 'horizontal':
-                    # Labels horizontaux : rectangle plus large
-                    shapes.append(dict(
-                        type="rect",
-                        x0=plot_label_col - 0.45,
-                        y0=plot_label_row - 0.35,
-                        x1=plot_label_col + 0.45,
-                        y1=plot_label_row + 0.35,
-                        line=dict(color=f'rgb({r}, {g}, {b})', width=2),
-                        fillcolor=f'rgba({r}, {g}, {b}, 0.7)',
-                    ))
-                else:
-                    # Labels verticaux : rectangle plus haut
-                    shapes.append(dict(
-                        type="rect",
-                        x0=plot_label_col - 0.35,
-                        y0=plot_label_row - 0.45,
-                        x1=plot_label_col + 0.35,
-                        y1=plot_label_row + 0.45,
-                        line=dict(color=f'rgb({r}, {g}, {b})', width=2),
-                        fillcolor=f'rgba({r}, {g}, {b}, 0.7)',
-                    ))
-    
-    # Configuration de la mise en page
-    fig.update_layout(
-        shapes=shapes,
-        annotations=annotations,
-        xaxis=dict(
-            title="Colonnes",
-            side="top",
-            tickmode='array',
-            tickvals=x_coords,
-            ticktext=x_labels,
-            showgrid=True,
-            gridcolor='lightgray',
-            zeroline=False,
-            range=[-0.5, max_col - 0.5]
-        ),
-        yaxis=dict(
-            title="Lignes",
-            autorange="reversed",
-            tickmode='array',
-            tickvals=y_coords,
-            ticktext=y_labels,
-            showgrid=True,
-            gridcolor='lightgray',
-            zeroline=False,
-            range=[max_row - 0.5, -0.5]
-        ),
-        width=1000,
-        height=600,
-        plot_bgcolor='white',
-        margin=dict(l=50, r=50, t=50, b=50),
-        title="Vue Excel - Système de paires alternées"
-    )
-    
-    return fig
+    return create_excel_visualization(workbook, sheet_name, zones, selected_zone, adapted_palette)
 
 def create_zone_detail_view_with_pairs(workbook, sheet_name: str, zone: Dict, color_palette: Dict) -> go.Figure:
     """

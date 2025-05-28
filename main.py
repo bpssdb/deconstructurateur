@@ -391,7 +391,7 @@ def configure_color_palette_pairs_global():
             st.error("❌ Veuillez configurer toutes les paires avec des couleurs différentes !")
 
 def process_single_sheet(sheet_name):
-    """Traite une seule feuille avec la palette globale"""
+    """Traite une seule feuille avec la palette globale - Version corrigée"""
     with st.spinner(f"Traitement de la feuille '{sheet_name}'..."):
         # Récupérer les cellules colorées pour cette feuille
         if sheet_name in st.session_state.all_sheets_color_cells:
@@ -412,23 +412,18 @@ def process_single_sheet(sheet_name):
         zone_cells = color_cells.get(zone_color, [])
         st.write(f"- Zone ({zone_color}): {len(zone_cells)} cellules trouvées")
         
-        # Headers horizontaux
-        h1_color = st.session_state.color_palette.get('h1_color')
-        h2_color = st.session_state.color_palette.get('h2_color')
-        h1_cells = color_cells.get(h1_color, []) if h1_color else []
-        h2_cells = color_cells.get(h2_color, []) if h2_color else []
-        st.write(f"- Headers H1 ({h1_color}): {len(h1_cells)} cellules")
-        st.write(f"- Headers H2 ({h2_color}): {len(h2_cells)} cellules")
+        # Afficher les infos pour chaque paire
+        if 'label_pairs' in st.session_state.color_palette:
+            for i, pair in enumerate(st.session_state.color_palette['label_pairs']):
+                h_color = pair['horizontal']['color']
+                v_color = pair['vertical']['color']
+                h_cells = color_cells.get(h_color, [])
+                v_cells = color_cells.get(v_color, [])
+                st.write(f"- Paire {i+1}:")
+                st.write(f"  - Horizontal ({h_color}): {len(h_cells)} cellules")
+                st.write(f"  - Vertical ({v_color}): {len(v_cells)} cellules")
         
-        # Headers verticaux
-        v1_color = st.session_state.color_palette.get('v1_color')
-        v2_color = st.session_state.color_palette.get('v2_color')
-        v1_cells = color_cells.get(v1_color, []) if v1_color else []
-        v2_cells = color_cells.get(v2_color, []) if v2_color else []
-        st.write(f"- Headers V1 ({v1_color}): {len(v1_cells)} cellules")
-        st.write(f"- Headers V2 ({v2_color}): {len(v2_cells)} cellules")
-        
-        # Détecter les zones avec le nouveau système
+        # Détecter les zones avec le système adapté
         zones, label_data = detect_zones_with_two_colors(
             st.session_state.workbook,
             sheet_name,
@@ -441,10 +436,36 @@ def process_single_sheet(sheet_name):
             total_labels = sum(len(z.get('labels', [])) for z in zones)
             st.write(f"📊 **Résultat**: {len(zones)} zones détectées, {total_labels} labels trouvés")
             
+            # Afficher un échantillon des labels trouvés
+            if total_labels > 0:
+                with st.expander("Voir un échantillon des labels trouvés"):
+                    for zone in zones[:2]:  # Premières 2 zones
+                        if zone.get('labels'):
+                            st.write(f"**Zone {zone['id']}:**")
+                            # Grouper par type
+                            h1_labels = [l for l in zone['labels'] if l['type'] == 'h1']
+                            h2_labels = [l for l in zone['labels'] if l['type'] == 'h2']
+                            v1_labels = [l for l in zone['labels'] if l['type'] == 'v1']
+                            v2_labels = [l for l in zone['labels'] if l['type'] == 'v2']
+                            
+                            if h1_labels:
+                                st.write(f"  H1: {', '.join([l.get('value', '(vide)') for l in h1_labels[:3]])}")
+                            if h2_labels:
+                                st.write(f"  H2: {', '.join([l.get('value', '(vide)') for l in h2_labels[:3]])}")
+                            if v1_labels:
+                                st.write(f"  V1: {', '.join([l.get('value', '(vide)') for l in v1_labels[:3]])}")
+                            if v2_labels:
+                                st.write(f"  V2: {', '.join([l.get('value', '(vide)') for l in v2_labels[:3]])}")
+            
             if total_labels == 0:
-                st.warning("⚠️ Aucun label trouvé malgré la détection de zones. Vérifiez que les couleurs des labels sont correctes et qu'ils sont positionnés près des zones.")
+                st.warning("⚠️ Aucun label trouvé malgré la détection de zones.")
+                st.info("Vérifiez que :")
+                st.write("1. Les couleurs des labels sont correctement sélectionnées")
+                st.write("2. Les labels sont positionnés directement au-dessus ou à gauche des zones")
+                st.write("3. Il n'y a pas de cellules vides entre les labels et les zones")
         else:
             st.warning("⚠️ Aucune zone détectée!")
+            st.info("Vérifiez que la couleur de zone sélectionnée est bien présente dans cette feuille.")
         
         # Sauvegarder les zones pour cette feuille
         if 'all_sheets_zones' not in st.session_state:
@@ -546,35 +567,149 @@ def display_global_summary():
         st.plotly_chart(fig2, use_container_width=True)
 
 def export_single_sheet_json(sheet_name):
-    """Exporte les données d'une seule feuille"""
+    """Exporte les données d'une seule feuille - Version corrigée"""
     zones = st.session_state.all_sheets_zones.get(sheet_name, [])
-    return export_to_json_pairs(zones, sheet_name, st.session_state.color_palette)
+    return export_to_json_with_four_colors(zones, sheet_name, st.session_state.color_palette)
+
+def export_to_json_with_four_colors(zones, sheet_name, color_palette):
+    """Exporte les zones avec le système à 4 couleurs en JSON"""
+    import json
+    from datetime import datetime
+    from utils.excel_utils import num_to_excel_col
+    
+    export_data = {
+        "date_export": datetime.now().isoformat(),
+        "sheet_name": sheet_name,
+        "detection_mode": "four_colors_system",
+        "color_palette": {
+            "zone_color": f"#{color_palette['zone_color']}",
+            "zone_name": color_palette['zone_name']
+        }
+    }
+    
+    # Ajouter les couleurs de headers selon le format
+    if 'label_pairs' in color_palette:
+        export_data["color_palette"]["headers"] = {
+            "h1": {
+                "color": f"#{color_palette['label_pairs'][0]['horizontal']['color']}",
+                "name": color_palette['label_pairs'][0]['horizontal']['name']
+            },
+            "h2": {
+                "color": f"#{color_palette['label_pairs'][1]['horizontal']['color']}" if len(color_palette['label_pairs']) > 1 else "",
+                "name": color_palette['label_pairs'][1]['horizontal']['name'] if len(color_palette['label_pairs']) > 1 else ""
+            },
+            "v1": {
+                "color": f"#{color_palette['label_pairs'][0]['vertical']['color']}",
+                "name": color_palette['label_pairs'][0]['vertical']['name']
+            },
+            "v2": {
+                "color": f"#{color_palette['label_pairs'][1]['vertical']['color']}" if len(color_palette['label_pairs']) > 1 else "",
+                "name": color_palette['label_pairs'][1]['vertical']['name'] if len(color_palette['label_pairs']) > 1 else ""
+            }
+        }
+    else:
+        # Format direct
+        export_data["color_palette"]["headers"] = {
+            "h1": {
+                "color": f"#{color_palette.get('h1_color', '')}",
+                "name": color_palette.get('h1_name', 'H1')
+            },
+            "h2": {
+                "color": f"#{color_palette.get('h2_color', '')}",
+                "name": color_palette.get('h2_name', 'H2')
+            },
+            "v1": {
+                "color": f"#{color_palette.get('v1_color', '')}",
+                "name": color_palette.get('v1_name', 'V1')
+            },
+            "v2": {
+                "color": f"#{color_palette.get('v2_color', '')}",
+                "name": color_palette.get('v2_name', 'V2')
+            }
+        }
+    
+    export_data["zones"] = []
+    
+    # Exporter les zones
+    for zone in zones:
+        zone_data = {
+            "id": zone['id'],
+            "bounds": {
+                "min_row": zone['bounds']['min_row'],
+                "max_row": zone['bounds']['max_row'],
+                "min_col": zone['bounds']['min_col'],
+                "max_col": zone['bounds']['max_col'],
+                "min_col_letter": num_to_excel_col(zone['bounds']['min_col']),
+                "max_col_letter": num_to_excel_col(zone['bounds']['max_col'])
+            },
+            "cell_count": zone['cell_count'],
+            "cells": [],
+            "labels": {
+                "h1": [],
+                "h2": [],
+                "v1": [],
+                "v2": []
+            }
+        }
+        
+        # Exporter les cellules
+        for cell in zone['cells']:
+            zone_data["cells"].append({
+                "address": f"{num_to_excel_col(cell['col'])}{cell['row']}",
+                "row": cell['row'],
+                "col": cell['col'],
+                "col_letter": num_to_excel_col(cell['col']),
+                "value": str(cell.get('value', '')) if cell.get('value') is not None else ""
+            })
+        
+        # Organiser les labels par type
+        for label in zone.get('labels', []):
+            label_type = label.get('type', '')
+            if label_type in ['h1', 'h2', 'v1', 'v2']:
+                zone_data["labels"][label_type].append({
+                    "address": f"{num_to_excel_col(label['col'])}{label['row']}",
+                    "row": label['row'],
+                    "col": label['col'],
+                    "col_letter": num_to_excel_col(label['col']),
+                    "value": str(label.get('value', '')) if label.get('value') is not None else "",
+                    "distance": label.get('distance', 0)
+                })
+        
+        export_data["zones"].append(zone_data)
+    
+    return json.dumps(export_data, indent=2, ensure_ascii=False)
 
 def export_all_sheets_json():
-    """Exporte toutes les feuilles dans un format similaire à l'exemple fourni"""
+    """Exporte toutes les feuilles dans un format global"""
     export_data = {
         "date_export": datetime.now().strftime("%Y-%m-%d"),
         "color_palette": {
             "zone_color": f"#{st.session_state.color_palette['zone_color']}",
-            "zone_name": st.session_state.color_palette['zone_name'],
-            "label_pairs": []
+            "zone_name": st.session_state.color_palette['zone_name']
         },
         "tags": []
     }
     
-    # Ajouter la configuration des paires
-    for i, pair in enumerate(st.session_state.color_palette.get('label_pairs', [])):
-        export_data["color_palette"]["label_pairs"].append({
-            "pair_id": i,
-            "horizontal": {
-                "color": f"#{pair['horizontal']['color']}",
-                "name": pair['horizontal']['name']
+    # Ajouter la configuration des headers
+    if 'label_pairs' in st.session_state.color_palette:
+        export_data["color_palette"]["headers"] = {
+            "h1": {
+                "color": f"#{st.session_state.color_palette['label_pairs'][0]['horizontal']['color']}",
+                "name": st.session_state.color_palette['label_pairs'][0]['horizontal']['name']
             },
-            "vertical": {
-                "color": f"#{pair['vertical']['color']}",
-                "name": pair['vertical']['name']
+            "h2": {
+                "color": f"#{st.session_state.color_palette['label_pairs'][1]['horizontal']['color']}" if len(st.session_state.color_palette['label_pairs']) > 1 else "",
+                "name": st.session_state.color_palette['label_pairs'][1]['horizontal']['name'] if len(st.session_state.color_palette['label_pairs']) > 1 else ""
+            },
+            "v1": {
+                "color": f"#{st.session_state.color_palette['label_pairs'][0]['vertical']['color']}",
+                "name": st.session_state.color_palette['label_pairs'][0]['vertical']['name']
+            },
+            "v2": {
+                "color": f"#{st.session_state.color_palette['label_pairs'][1]['vertical']['color']}" if len(st.session_state.color_palette['label_pairs']) > 1 else "",
+                "name": st.session_state.color_palette['label_pairs'][1]['vertical']['name'] if len(st.session_state.color_palette['label_pairs']) > 1 else ""
             }
-        })
+        }
     
     # Parcourir toutes les feuilles et créer les tags
     tag_id = 1
@@ -582,16 +717,35 @@ def export_all_sheets_json():
         for zone in zones:
             for cell in zone['cells']:
                 # Créer un tag pour chaque cellule de zone
-                labels = []
+                labels = [sheet_name]  # Le nom de la feuille est toujours le premier label
                 source_cells = []
                 
-                # Ajouter le nom de la feuille comme premier label
-                labels.append(sheet_name)
-                
-                # Collecter tous les labels de cette zone
-                for label in zone.get('labels', []):
+                # Collecter les labels H1
+                h1_labels = [l for l in zone.get('labels', []) if l.get('type') == 'h1']
+                for label in h1_labels:
                     if label.get('value'):
-                        labels.append(str(label['value']))
+                        labels.append(f"H1:{label['value']}")
+                        source_cells.append(f"{num_to_excel_col(label['col'])}{label['row']}")
+                
+                # Collecter les labels H2
+                h2_labels = [l for l in zone.get('labels', []) if l.get('type') == 'h2']
+                for label in h2_labels:
+                    if label.get('value'):
+                        labels.append(f"H2:{label['value']}")
+                        source_cells.append(f"{num_to_excel_col(label['col'])}{label['row']}")
+                
+                # Collecter les labels V1
+                v1_labels = [l for l in zone.get('labels', []) if l.get('type') == 'v1']
+                for label in v1_labels:
+                    if label.get('value'):
+                        labels.append(f"V1:{label['value']}")
+                        source_cells.append(f"{num_to_excel_col(label['col'])}{label['row']}")
+                
+                # Collecter les labels V2
+                v2_labels = [l for l in zone.get('labels', []) if l.get('type') == 'v2']
+                for label in v2_labels:
+                    if label.get('value'):
+                        labels.append(f"V2:{label['value']}")
                         source_cells.append(f"{num_to_excel_col(label['col'])}{label['row']}")
                 
                 # Ajouter la cellule elle-même
@@ -613,6 +767,8 @@ def export_all_sheets_json():
                 tag_id += 1
     
     return json.dumps(export_data, indent=2, ensure_ascii=False)
+
+    
     """Configure la palette de couleurs avec système de paires"""
     st.header("🎯 Étape 2: Configuration de la palette avec paires alternées")
     
