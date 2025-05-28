@@ -1,6 +1,6 @@
 """
 Utilitaires pour la manipulation des fichiers Excel
-Supporte les formats .xlsx et .xls
+Version corrigée pour mieux détecter les couleurs
 """
 
 import openpyxl
@@ -27,7 +27,7 @@ def excel_col_to_num(col_str: str) -> int:
         num = num * 26 + (ord(char.upper()) - ord('A') + 1)
     return num
 
-def load_workbook(file):
+def load_workbook(file, data_only=False):
     """
     Charge un fichier Excel (.xlsx ou .xls)
     Retourne un workbook openpyxl
@@ -37,7 +37,7 @@ def load_workbook(file):
     
     if filename.endswith('.xlsx'):
         # Fichier .xlsx - utiliser openpyxl directement
-        return openpyxl.load_workbook(file, data_only=False)
+        return openpyxl.load_workbook(file, data_only=data_only)
     
     elif filename.endswith('.xls'):
         # Fichier .xls - convertir via xlrd
@@ -100,118 +100,154 @@ def get_sheet_names(workbook) -> List[str]:
 
 def get_cell_color(cell) -> Union[str, None]:
     """
-    Extrait la couleur d'une cellule
-    Retourne le code hex ou None
+    Version améliorée pour extraire la couleur d'une cellule
+    Gère mieux les différents formats de couleurs Excel
     """
     try:
         # Vérifier si la cellule a un remplissage
         if not hasattr(cell, 'fill') or not cell.fill:
             return None
         
-        # Vérifier le type de remplissage
-        if hasattr(cell.fill, 'patternType'):
-            # Si pas de pattern ou pattern none, pas de couleur
-            if cell.fill.patternType in [None, 'none']:
-                return None
+        fill = cell.fill
         
-        color = None
+        # Debug
+        # print(f"DEBUG get_cell_color: Cell {cell.coordinate}")
+        # print(f"  Fill type: {fill.fill_type}")
+        # print(f"  Pattern type: {getattr(fill, 'patternType', 'N/A')}")
         
-        # Essayer différentes propriétés de couleur
-        # 1. fgColor (couleur de premier plan)
-        if hasattr(cell.fill, 'fgColor') and cell.fill.fgColor:
-            if hasattr(cell.fill.fgColor, 'rgb') and cell.fill.fgColor.rgb:
-                color = cell.fill.fgColor.rgb
-            elif hasattr(cell.fill.fgColor, 'value') and cell.fill.fgColor.value:
-                color = str(cell.fill.fgColor.value)
-            elif hasattr(cell.fill.fgColor, 'index'):
-                # Pour les couleurs indexées, essayer de les convertir
-                # Les couleurs indexées sont parfois stockées différemment
-                pass
+        # Si pas de remplissage ou remplissage "none"
+        if fill.fill_type in [None, 'none', '']:
+            return None
         
-        # 2. start_color (pour les dégradés)
-        if not color and hasattr(cell.fill, 'start_color') and cell.fill.start_color:
-            if hasattr(cell.fill.start_color, 'index'):
-                # Couleur indexée
-                if hasattr(cell.fill.start_color, 'rgb') and cell.fill.start_color.rgb:
-                    color = cell.fill.start_color.rgb
-                elif hasattr(cell.fill.start_color, 'value'):
-                    color = str(cell.fill.start_color.value)
-            elif hasattr(cell.fill.start_color, 'rgb') and cell.fill.start_color.rgb:
-                color = cell.fill.start_color.rgb
-            elif hasattr(cell.fill.start_color, 'value') and cell.fill.start_color.value:
-                color = str(cell.fill.start_color.value)
-        
-        # 3. bgColor (couleur de fond)
-        if not color and hasattr(cell.fill, 'bgColor') and cell.fill.bgColor:
-            if hasattr(cell.fill.bgColor, 'rgb') and cell.fill.bgColor.rgb:
-                color = cell.fill.bgColor.rgb
-            elif hasattr(cell.fill.bgColor, 'value') and cell.fill.bgColor.value:
-                color = str(cell.fill.bgColor.value)
-        
-        # 4. patternType solid avec une couleur
-        if not color and hasattr(cell.fill, 'patternType') and cell.fill.patternType == 'solid':
-            # Pour les patterns solid, la couleur peut être dans fgColor ou start_color
-            if hasattr(cell.fill, 'fgColor') and cell.fill.fgColor:
-                # Essayer toutes les propriétés possibles
-                for attr in ['rgb', 'value', 'theme', 'tint']:
-                    if hasattr(cell.fill.fgColor, attr):
-                        val = getattr(cell.fill.fgColor, attr)
-                        if val:
-                            color = str(val)
-                            break
-        
-        # 5. Gestion des couleurs theme + tint
-        if not color and hasattr(cell.fill, 'fgColor') and cell.fill.fgColor:
-            if hasattr(cell.fill.fgColor, 'theme') and cell.fill.fgColor.theme is not None:
-                # Les couleurs theme sont des couleurs du thème Excel
-                theme = cell.fill.fgColor.theme
-                tint = getattr(cell.fill.fgColor, 'tint', 0)
-                # Créer un code couleur basé sur le theme pour le debug
-                color = f"THEME{theme:02d}"
-                if abs(tint) > 0.01:  # Si tint significatif
-                    tint_hex = int((tint + 1) * 127.5)
-                    color = f"T{theme:02d}{tint_hex:02X}"
-        
-        if color:
-            # Nettoyer et valider la couleur
-            hex_color = rgb_to_hex(color)
-            return hex_color
+        # Pour les remplissages de type "solid" (le plus courant)
+        if fill.fill_type == 'solid' or (hasattr(fill, 'patternType') and fill.patternType == 'solid'):
+            # Essayer d'abord fgColor (couleur de premier plan)
+            if hasattr(fill, 'fgColor') and fill.fgColor:
+                color = extract_color_value(fill.fgColor)
+                if color:
+                    return color
             
+            # Ensuite start_color
+            if hasattr(fill, 'start_color') and fill.start_color:
+                color = extract_color_value(fill.start_color)
+                if color:
+                    return color
+        
+        # Pour les autres types de patterns, essayer bgColor
+        if hasattr(fill, 'bgColor') and fill.bgColor:
+            color = extract_color_value(fill.bgColor)
+            if color:
+                return color
+        
+        # Dernière tentative : end_color
+        if hasattr(fill, 'end_color') and fill.end_color:
+            color = extract_color_value(fill.end_color)
+            if color:
+                return color
+                
     except Exception as e:
-        print(f"Erreur lors de l'extraction de la couleur: {e}")
+        print(f"Erreur lors de l'extraction de la couleur pour {cell.coordinate}: {e}")
+    
+    return None
+
+def extract_color_value(color_obj) -> Union[str, None]:
+    """
+    Extrait la valeur de couleur d'un objet Color d'openpyxl
+    """
+    if not color_obj:
+        return None
+    
+    # Debug
+    # print(f"  Color object type: {type(color_obj)}")
+    # print(f"  Color attributes: {dir(color_obj)}")
+    
+    # Si c'est une chaîne directe
+    if isinstance(color_obj, str):
+        return clean_color_hex(color_obj)
+    
+    # Si l'objet a un attribut rgb
+    if hasattr(color_obj, 'rgb') and color_obj.rgb:
+        return clean_color_hex(color_obj.rgb)
+    
+    # Si l'objet a un attribut value
+    if hasattr(color_obj, 'value') and color_obj.value:
+        return clean_color_hex(str(color_obj.value))
+    
+    # Si c'est une couleur indexée
+    if hasattr(color_obj, 'indexed') and color_obj.indexed is not None:
+        # Les couleurs indexées nécessitent une table de correspondance
+        # Pour l'instant, on ignore les couleurs indexées
+        return None
+    
+    # Si c'est une couleur de thème
+    if hasattr(color_obj, 'theme') and color_obj.theme is not None:
+        # Les couleurs de thème nécessitent le thème du document
+        # Pour l'instant, on ignore les couleurs de thème
+        return None
+    
+    # Tentative sur la représentation string
+    try:
+        color_str = str(color_obj)
+        if len(color_str) in [6, 8] and all(c in '0123456789ABCDEFabcdef' for c in color_str):
+            return clean_color_hex(color_str)
+    except:
+        pass
+    
+    return None
+
+def clean_color_hex(color_str: str) -> str:
+    """
+    Nettoie et normalise une chaîne de couleur hexadécimale
+    """
+    if not color_str:
+        return None
+    
+    # Si c'est un objet RGB d'openpyxl
+    if hasattr(color_str, '__class__') and color_str.__class__.__name__ == 'RGB':
+        # Extraire la valeur hex de l'objet RGB
+        if hasattr(color_str, 'rgb'):
+            color_str = color_str.rgb
+        else:
+            # Tenter de convertir en string
+            color_str = str(color_str)
+    
+    # Convertir en string si ce n'est pas déjà le cas
+    if not isinstance(color_str, str):
+        color_str = str(color_str)
+    
+    # Enlever les espaces et mettre en majuscules
+    color_str = color_str.strip().upper()
+    
+    # Enlever le # s'il est présent
+    if color_str.startswith('#'):
+        color_str = color_str[1:]
+    
+    # Si c'est du format ARGB (8 caractères), enlever le canal alpha
+    if len(color_str) == 8:
+        # Les 2 premiers caractères sont l'alpha
+        alpha = color_str[:2]
+        color_str = color_str[2:]
+        
+        # Si alpha est 00 (transparent), ignorer cette couleur
+        if alpha == '00':
+            return None
+    
+    # Vérifier que c'est bien un hex valide de 6 caractères
+    if len(color_str) == 6 and all(c in '0123456789ABCDEF' for c in color_str):
+        # Ignorer le blanc et les couleurs très claires
+        if color_str in ['FFFFFF', 'FFFFFE', 'FEFEFE']:
+            return None
+        return color_str
     
     return None
 
 def rgb_to_hex(rgb: Union[str, Tuple[int, int, int]]) -> str:
     """Convertit RGB en hexadécimal"""
     if isinstance(rgb, str):
-        # Nettoyer la chaîne
-        rgb = rgb.strip().upper()
-        
-        # Si c'est déjà en hex (avec ou sans #)
-        if rgb.startswith('#'):
-            rgb = rgb[1:]
-        
-        # Si c'est un hex valide
-        if len(rgb) == 6 and all(c in '0123456789ABCDEF' for c in rgb):
-            return rgb
-        elif len(rgb) == 8 and all(c in '0123456789ABCDEF' for c in rgb):
-            return rgb[2:]  # Enlever le canal alpha
-        
-        # Si c'est une valeur numérique (parfois Excel stocke les couleurs comme des entiers)
-        try:
-            if rgb.isdigit():
-                # Convertir l'entier en hex
-                color_int = int(rgb)
-                hex_color = f"{color_int:06X}"
-                return hex_color
-        except:
-            pass
-            
+        return clean_color_hex(rgb)
     elif isinstance(rgb, (tuple, list)) and len(rgb) >= 3:
         return '%02X%02X%02X' % (int(rgb[0]), int(rgb[1]), int(rgb[2]))
     elif isinstance(rgb, int):
-        # Parfois les couleurs sont stockées comme des entiers
         return f"{rgb:06X}"
     
     return "FFFFFF"
@@ -219,7 +255,6 @@ def rgb_to_hex(rgb: Union[str, Tuple[int, int, int]]) -> str:
 def get_merged_cells_info(worksheet) -> Dict[Tuple[int, int], Dict]:
     """
     Retourne les informations sur les cellules fusionnées
-    Format: {(row, col): {'min_row': x, 'max_row': y, 'min_col': a, 'max_col': b}}
     """
     merged_info = {}
     

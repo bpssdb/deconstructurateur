@@ -1,25 +1,26 @@
 """
 Déconstructurateur Excel - Application principale
-Point d'entrée de l'application Streamlit
+Version avec support des paires de labels alternées
 """
 
 import streamlit as st
 from datetime import datetime
 import json
-
-# Import des modules locaux
-from utils.excel_utils import load_workbook, get_sheet_names
-from utils.color_detector import detect_all_colors
-from utils.zone_detector import detect_zones_with_palette, detect_zones_with_flexible_palette
-from utils.visualization import create_excel_visualization, create_color_preview_html, create_zone_detail_view, create_dataframe_view
-from utils.export import export_to_json
-import plotly.express as px
+from typing import List, Dict, Optional
 import pandas as pd
 from collections import defaultdict
 
+# Import des modules locaux
+from utils.excel_utils import load_workbook, get_sheet_names, num_to_excel_col
+from utils.color_detector import detect_all_colors
+from utils.zone_detector import detect_zones_with_alternating_pairs, detect_zones_with_two_colors
+from utils.visualization import create_excel_visualization, create_color_preview_html, create_zone_detail_view, create_dataframe_view
+from utils.export import export_to_json
+import plotly.express as px
+
 # Configuration de la page Streamlit
 st.set_page_config(
-    page_title="📊 Déconstructurateur Excel",
+    page_title="📊 Déconstructurateur Excel - Paires Alternées",
     page_icon="📊",
     layout="wide"
 )
@@ -42,6 +43,16 @@ st.markdown("""
     div[data-testid="stHorizontalBlock"] {
         align-items: stretch;
     }
+    .pair-container {
+        background-color: #f0f0f0;
+        padding: 15px;
+        border-radius: 10px;
+        margin-bottom: 15px;
+    }
+    .pair-header {
+        font-weight: bold;
+        margin-bottom: 10px;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -61,13 +72,19 @@ def init_session_state():
         st.session_state.detected_colors = []
     if 'color_cells' not in st.session_state:
         st.session_state.color_cells = {}
+    if 'label_pairs' not in st.session_state:
+        st.session_state.label_pairs = []
+    if 'all_sheets_zones' not in st.session_state:
+        st.session_state.all_sheets_zones = {}
+    if 'all_sheets_color_cells' not in st.session_state:
+        st.session_state.all_sheets_color_cells = {}
 
 def main():
     """Fonction principale de l'application"""
     init_session_state()
     
-    st.title("📊 Déconstructurateur Excel Python")
-    st.markdown("Détection automatique des couleurs et configuration de la palette")
+    st.title("📊 Déconstructurateur Excel - Paires de Labels Alternées")
+    st.markdown("Détection automatique des zones avec système de paires de labels pour une extraction intelligente")
     
     # Upload du fichier
     uploaded_file = st.file_uploader(
@@ -77,56 +94,147 @@ def main():
     
     if uploaded_file:
         try:
-            # Charger le workbook
-            st.session_state.workbook = load_workbook(uploaded_file)
+            # Charger le workbook avec les valeurs calculées
+            st.session_state.workbook = load_workbook_with_values(uploaded_file)
             sheet_names = get_sheet_names(st.session_state.workbook)
             
-            # Sélection de la feuille
-            selected_sheet = st.selectbox("📄 Sélectionner une feuille", sheet_names)
+            # Étape 1: Configuration globale de la palette
+            st.header("🎨 Étape 1: Configuration globale des couleurs")
             
-            # Étape 1: Détection des couleurs
-            st.header("🎨 Étape 1: Détection des couleurs")
-            
-            col1, col2 = st.columns([1, 3])
-            
-            with col1:
-                if st.button("🔍 Analyser les couleurs", type="primary"):
-                    with st.spinner("Analyse des couleurs en cours..."):
+            # Détection des couleurs sur toutes les feuilles
+            if st.button("🔍 Analyser les couleurs dans tout le fichier", type="primary"):
+                with st.spinner("Analyse des couleurs en cours..."):
+                    all_colors = set()
+                    color_counts = defaultdict(int)
+                    st.session_state.all_sheets_color_cells = {}
+                    
+                    # Analyser toutes les feuilles
+                    for sheet in sheet_names:
                         colors, color_cells = detect_all_colors(
                             st.session_state.workbook, 
-                            selected_sheet
+                            sheet
                         )
-                        st.session_state.detected_colors = colors
-                        st.session_state.color_cells = color_cells
-                        st.session_state.current_sheet = selected_sheet
                         
-                        if len(colors) > 0:
-                            st.success(f"✅ {len(colors)} couleurs détectées!")
-                        else:
-                            st.warning("⚠️ Aucune couleur détectée. Vérifiez que votre fichier contient des cellules colorées.")
-                            
-                            # Afficher des informations de debug
-                            with st.expander("🔧 Informations de débogage"):
-                                st.write("Essayez de:")
-                                st.write("- Vérifier que les cellules ont bien une couleur de fond (pas juste du texte coloré)")
-                                st.write("- Resauvegarder le fichier dans Excel")
-                                st.write("- Utiliser un format .xlsx plutôt que .xls")
-                                st.write("- S'assurer que les couleurs ne sont pas blanches (#FFFFFF)")
-                                
-                                # Afficher un échantillon de cellules pour debug
-                                ws = st.session_state.workbook[selected_sheet]
-                                st.write(f"Dimensions de la feuille: {ws.max_row} lignes x {ws.max_column} colonnes")
+                        # IMPORTANT: Sauvegarder les cellules colorées par feuille
+                        st.session_state.all_sheets_color_cells[sheet] = color_cells
+                        
+                        # Fusionner les couleurs
+                        for color in colors:
+                            color_hex = color['hex']
+                            color_counts[color_hex] += color['count']
+                            all_colors.add(color_hex)
+                    
+                    # Créer la liste consolidée des couleurs
+                    consolidated_colors = []
+                    for hex_color in all_colors:
+                        from utils.color_detector import get_color_name
+                        consolidated_colors.append({
+                            'hex': hex_color,
+                            'name': get_color_name(hex_color),
+                            'count': color_counts[hex_color]
+                        })
+                    
+                    # Trier par nombre d'occurrences
+                    consolidated_colors.sort(key=lambda x: x['count'], reverse=True)
+                    
+                    st.session_state.detected_colors = consolidated_colors
+                    st.session_state.global_color_analysis = True
+                    
+                    if len(consolidated_colors) > 0:
+                        st.success(f"✅ {len(consolidated_colors)} couleurs uniques détectées dans {len(sheet_names)} feuilles!")
+                        
+                        # Debug : afficher un résumé des cellules par couleur
+                        with st.expander("🔍 Debug : Détails des couleurs"):
+                            for color in consolidated_colors[:5]:
+                                st.write(f"**Couleur #{color['hex']} ({color['name']})** : {color['count']} cellules")
+                                # Afficher quelques exemples
+                                examples = []
+                                for sheet, cells_dict in st.session_state.all_sheets_color_cells.items():
+                                    if color['hex'] in cells_dict:
+                                        for cell in cells_dict[color['hex']][:3]:
+                                            examples.append(f"{sheet} - {num_to_excel_col(cell['col'])}{cell['row']}: {cell.get('value', '(vide)')}")
+                                        if len(examples) >= 3:
+                                            break
+                                if examples:
+                                    st.write("Exemples :")
+                                    for ex in examples[:5]:
+                                        st.write(f"  - {ex}")
+                    else:
+                        st.warning("⚠️ Aucune couleur détectée dans le fichier.")
             
             # Afficher les couleurs détectées
-            if st.session_state.detected_colors:
+            if st.session_state.detected_colors and hasattr(st.session_state, 'global_color_analysis'):
                 display_detected_colors()
                 
-                # Étape 2: Configuration de la palette
-                configure_color_palette(selected_sheet)
+                # Configuration de la palette globale
+                if not st.session_state.color_palette:
+                    configure_color_palette_pairs_global()
+                else:
+                    display_selected_palette_pairs()
+                    
+                    # Bouton pour reconfigurer
+                    if st.button("🔄 Reconfigurer la palette"):
+                        st.session_state.color_palette = None
+                        st.rerun()
             
-            # Affichage des résultats
-            if st.session_state.zones and st.session_state.color_palette:
-                display_results(selected_sheet)
+            # Étape 2: Traitement des feuilles
+            if st.session_state.color_palette:
+                st.header("📄 Étape 2: Traitement des feuilles")
+                
+                # Tabs pour le traitement
+                process_tab1, process_tab2 = st.tabs(["🔍 Traitement individuel", "⚡ Traitement global"])
+                
+                with process_tab1:
+                    # Sélection de la feuille
+                    selected_sheet = st.selectbox("📄 Sélectionner une feuille à traiter", sheet_names)
+                    
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        if st.button("🎯 Détecter les zones", key="detect_single"):
+                            process_single_sheet(selected_sheet)
+                    
+                    with col2:
+                        # Afficher les zones détectées pour cette feuille
+                        sheet_zones = st.session_state.get('all_sheets_zones', {}).get(selected_sheet, [])
+                        if sheet_zones:
+                            st.success(f"✅ {len(sheet_zones)} zones détectées")
+                    
+                    # Affichage des résultats pour la feuille sélectionnée
+                    if selected_sheet in st.session_state.get('all_sheets_zones', {}):
+                        st.session_state.zones = st.session_state.all_sheets_zones[selected_sheet]
+                        st.session_state.current_sheet = selected_sheet
+                        display_sheet_results(selected_sheet)
+                
+                with process_tab2:
+                    st.markdown("### ⚡ Traitement de toutes les feuilles")
+                    
+                    col1, col2, col3 = st.columns(3)
+                    
+                    with col1:
+                        if st.button("🚀 Traiter toutes les feuilles", type="primary"):
+                            process_all_sheets(sheet_names)
+                    
+                    with col2:
+                        # Statistiques globales
+                        if hasattr(st.session_state, 'all_sheets_zones'):
+                            total_zones = sum(len(zones) for zones in st.session_state.all_sheets_zones.values())
+                            st.metric("Total zones", total_zones)
+                    
+                    with col3:
+                        # Export global
+                        if hasattr(st.session_state, 'all_sheets_zones') and st.session_state.all_sheets_zones:
+                            if st.button("📥 Exporter tout en JSON"):
+                                json_data = export_all_sheets_json()
+                                st.download_button(
+                                    label="💾 Télécharger JSON global",
+                                    data=json_data,
+                                    file_name=f"excel_complet_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+                                    mime="application/json"
+                                )
+                    
+                    # Afficher le résumé par feuille
+                    if hasattr(st.session_state, 'all_sheets_zones'):
+                        display_global_summary()
                 
         except Exception as e:
             st.error(f"❌ Erreur lors du chargement du fichier: {str(e)}")
@@ -137,66 +245,61 @@ def main():
 
 def display_detected_colors():
     """Affiche les couleurs détectées avec une visualisation améliorée"""
-    st.subheader("Couleurs trouvées dans la feuille:")
+    st.subheader("Couleurs trouvées dans le fichier:")
     
     if not st.session_state.detected_colors:
-        st.warning("Aucune couleur détectée dans la feuille.")
+        st.warning("Aucune couleur détectée dans le fichier.")
         return
     
-    # Créer deux colonnes pour l'affichage
-    col1, col2 = st.columns([2, 3])
+    # Visualisation de la distribution des couleurs
+    st.markdown("### 📊 Distribution des couleurs")
     
-    with col1:
-        # Tableau des couleurs
-        st.markdown("### 🎨 Palette détectée")
-        html_table = create_color_preview_html(st.session_state.detected_colors)
-        st.markdown(html_table, unsafe_allow_html=True)
-    
-    with col2:
-        # Visualisation de la distribution des couleurs
-        st.markdown("### 📊 Distribution des couleurs")
+    if st.session_state.detected_colors:
+        # Préparer les données pour le graphique
+        color_data = []
+        color_map = {}
         
-        # Créer un graphique en barres des couleurs
-        import plotly.express as px
+        # Prendre les 15 couleurs les plus fréquentes
+        for color in st.session_state.detected_colors[:15]:
+            color_name = f"{color['name']} (#{color['hex']})"
+            color_data.append({
+                'Couleur': color_name,
+                'Occurrences': color['count']
+            })
+            color_map[color_name] = f"#{color['hex']}"
         
-        if st.session_state.detected_colors:
-            color_data = []
-            color_map = {}
+        if color_data:
+            df_colors = pd.DataFrame(color_data)
             
-            for color in st.session_state.detected_colors[:10]:  # Limiter aux 10 premières
-                color_name = f"{color['name']} (#{color['hex']})"
-                color_data.append({
-                    'Couleur': color_name,
-                    'Occurrences': color['count']
-                })
-                # Créer un mapping pour les couleurs réelles
-                color_map[color_name] = f"#{color['hex']}"
+            fig = px.bar(
+                df_colors, 
+                x='Couleur', 
+                y='Occurrences',
+                title=f"Distribution des couleurs (Top {len(color_data)} sur {len(st.session_state.detected_colors)} détectées)"
+            )
             
-            if color_data:
-                df_colors = pd.DataFrame(color_data)
-                
-                fig = px.bar(
-                    df_colors, 
-                    x='Couleur', 
-                    y='Occurrences',
-                    title="Nombre de cellules par couleur"
-                )
-                
-                # Appliquer les couleurs réelles aux barres
-                colors_list = [color_map.get(name, '#888888') for name in df_colors['Couleur']]
-                fig.update_traces(marker_color=colors_list)
-                
-                fig.update_layout(showlegend=False, height=400)
-                st.plotly_chart(fig, use_container_width=True)
-            else:
-                st.info("Aucune donnée de couleur à afficher")
-        else:
-            st.info("Aucune couleur détectée pour créer le graphique")
+            # Appliquer les vraies couleurs aux barres
+            colors_list = [color_map.get(name, '#888888') for name in df_colors['Couleur']]
+            fig.update_traces(marker_color=colors_list)
+            
+            # Améliorer la mise en page
+            fig.update_layout(
+                showlegend=False, 
+                height=500,
+                xaxis_tickangle=-45,
+                margin=dict(b=150)  # Plus d'espace en bas pour les labels
+            )
+            
+            st.plotly_chart(fig, use_container_width=True)
+            
+            # Informations supplémentaires
+            total_colored_cells = sum(c['count'] for c in st.session_state.detected_colors)
+            st.info(f"💡 Total : {total_colored_cells:,} cellules colorées détectées dans l'ensemble du fichier")
 
-def configure_color_palette(selected_sheet):
-    """Configure la palette de couleurs pour la détection"""
-    st.header("🎯 Étape 2: Configuration de la palette")
-    st.info("Identifiez les 3 types de couleurs dans votre fichier Excel")
+def configure_color_palette_pairs_global():
+    """Configure la palette de couleurs globale pour tout le fichier Excel"""
+    st.markdown("### 🎯 Configuration globale de la palette")
+    st.info("Cette palette sera utilisée pour toutes les feuilles du fichier Excel")
     
     # Préparer les options de couleurs
     color_options = {
@@ -204,7 +307,322 @@ def configure_color_palette(selected_sheet):
         for c in st.session_state.detected_colors
     }
     
-    # Configuration pour exactement 3 couleurs
+    # Configuration de la couleur des zones
+    st.markdown("#### 📦 1. Couleur des zones de données")
+    zone_color = st.selectbox(
+        "Cellules à labelliser (données à compléter par le LLM)",
+        options=list(color_options.keys()),
+        help="Cette couleur sera recherchée dans toutes les feuilles"
+    )
+    
+    # Configuration des paires de labels
+    st.markdown("#### 🏷️ 2. Paires de labels (en-têtes alternés)")
+    
+    # Nombre de paires
+    num_pairs = st.number_input("Nombre de paires de labels", min_value=1, max_value=5, value=2)
+    
+    # Configuration de chaque paire
+    pairs = []
+    used_colors = [color_options[zone_color]]
+    
+    for i in range(num_pairs):
+        st.markdown(f"""
+        <div class="pair-container">
+            <div class="pair-header">🔗 Paire {i+1}</div>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            available_h = [opt for opt in color_options.keys() if color_options[opt] not in used_colors]
+            
+            h_color = st.selectbox(
+                f"Couleur horizontale (colonnes)",
+                options=available_h,
+                key=f"global_h_color_{i}",
+                help=f"Labels horizontaux pour la paire {i+1}"
+            )
+            if h_color:
+                used_colors.append(color_options[h_color])
+        
+        with col2:
+            available_v = [opt for opt in color_options.keys() if color_options[opt] not in used_colors]
+            
+            v_color = st.selectbox(
+                f"Couleur verticale (lignes)",
+                options=available_v,
+                key=f"global_v_color_{i}",
+                help=f"Labels verticaux pour la paire {i+1}"
+            )
+            if v_color:
+                used_colors.append(color_options[v_color])
+        
+        if h_color and v_color:
+            pairs.append({
+                'horizontal': {
+                    'color': color_options[h_color],
+                    'name': f"Headers H{i+1} ({h_color.split(' (')[0]})"
+                },
+                'vertical': {
+                    'color': color_options[v_color],
+                    'name': f"Headers V{i+1} ({v_color.split(' (')[0]})"
+                }
+            })
+    
+    # Bouton de validation
+    if st.button("✅ Valider la palette globale", type="primary"):
+        if len(pairs) == num_pairs and all(p['horizontal']['color'] != p['vertical']['color'] for p in pairs):
+            all_colors = [color_options[zone_color]]
+            for p in pairs:
+                all_colors.extend([p['horizontal']['color'], p['vertical']['color']])
+            
+            if len(all_colors) == len(set(all_colors)):
+                st.session_state.color_palette = {
+                    'zone_color': color_options[zone_color],
+                    'zone_name': zone_color.split(' (')[0],
+                    'label_pairs': pairs
+                }
+                st.session_state.label_pairs = pairs
+                st.success("✅ Palette globale configurée! Vous pouvez maintenant traiter les feuilles.")
+            else:
+                st.error("❌ Toutes les couleurs doivent être différentes !")
+        else:
+            st.error("❌ Veuillez configurer toutes les paires avec des couleurs différentes !")
+
+def process_single_sheet(sheet_name):
+    """Traite une seule feuille avec la palette globale"""
+    with st.spinner(f"Traitement de la feuille '{sheet_name}'..."):
+        # Récupérer les cellules colorées pour cette feuille
+        if sheet_name in st.session_state.all_sheets_color_cells:
+            color_cells = st.session_state.all_sheets_color_cells[sheet_name]
+            st.write(f"📌 Utilisation des couleurs détectées précédemment")
+        else:
+            # Si pas encore analysé, le faire maintenant
+            st.warning(f"⚠️ Couleurs non détectées pour '{sheet_name}', analyse en cours...")
+            colors, color_cells = detect_all_colors(
+                st.session_state.workbook, 
+                sheet_name
+            )
+            st.session_state.all_sheets_color_cells[sheet_name] = color_cells
+        
+        # Debug : vérifier que les couleurs sont présentes
+        st.write("**Recherche des couleurs de la palette:**")
+        zone_color = st.session_state.color_palette['zone_color']
+        zone_cells = color_cells.get(zone_color, [])
+        st.write(f"- Zone ({zone_color}): {len(zone_cells)} cellules trouvées")
+        
+        # Headers horizontaux
+        h1_color = st.session_state.color_palette.get('h1_color')
+        h2_color = st.session_state.color_palette.get('h2_color')
+        h1_cells = color_cells.get(h1_color, []) if h1_color else []
+        h2_cells = color_cells.get(h2_color, []) if h2_color else []
+        st.write(f"- Headers H1 ({h1_color}): {len(h1_cells)} cellules")
+        st.write(f"- Headers H2 ({h2_color}): {len(h2_cells)} cellules")
+        
+        # Headers verticaux
+        v1_color = st.session_state.color_palette.get('v1_color')
+        v2_color = st.session_state.color_palette.get('v2_color')
+        v1_cells = color_cells.get(v1_color, []) if v1_color else []
+        v2_cells = color_cells.get(v2_color, []) if v2_color else []
+        st.write(f"- Headers V1 ({v1_color}): {len(v1_cells)} cellules")
+        st.write(f"- Headers V2 ({v2_color}): {len(v2_cells)} cellules")
+        
+        # Détecter les zones avec le nouveau système
+        zones, label_data = detect_zones_with_two_colors(
+            st.session_state.workbook,
+            sheet_name,
+            st.session_state.color_palette,
+            color_cells
+        )
+        
+        # Debug : afficher les détails des zones
+        if zones:
+            total_labels = sum(len(z.get('labels', [])) for z in zones)
+            st.write(f"📊 **Résultat**: {len(zones)} zones détectées, {total_labels} labels trouvés")
+            
+            if total_labels == 0:
+                st.warning("⚠️ Aucun label trouvé malgré la détection de zones. Vérifiez que les couleurs des labels sont correctes et qu'ils sont positionnés près des zones.")
+        else:
+            st.warning("⚠️ Aucune zone détectée!")
+        
+        # Sauvegarder les zones pour cette feuille
+        if 'all_sheets_zones' not in st.session_state:
+            st.session_state.all_sheets_zones = {}
+        st.session_state.all_sheets_zones[sheet_name] = zones
+        
+        st.success(f"✅ Traitement terminé pour '{sheet_name}'!")
+
+def process_all_sheets(sheet_names):
+    """Traite toutes les feuilles du fichier"""
+    progress_bar = st.progress(0)
+    status_text = st.empty()
+    
+    for idx, sheet_name in enumerate(sheet_names):
+        status_text.text(f"Traitement de '{sheet_name}'... ({idx+1}/{len(sheet_names)})")
+        process_single_sheet(sheet_name)
+        progress_bar.progress((idx + 1) / len(sheet_names))
+    
+    status_text.text("✅ Traitement terminé!")
+    
+    # Afficher le résumé
+    total_zones = sum(len(zones) for zones in st.session_state.all_sheets_zones.values())
+    st.success(f"🎉 Traitement terminé! {total_zones} zones détectées dans {len(sheet_names)} feuilles.")
+
+def display_sheet_results(sheet_name):
+    """Affiche les résultats pour une feuille spécifique"""
+    # Utiliser les fonctions existantes mais avec le contexte de la feuille
+    st.header(f"📊 Résultats pour '{sheet_name}'")
+    
+    # Barre d'outils
+    tool_col1, tool_col2, tool_col3 = st.columns([1, 1, 1])
+    
+    with tool_col1:
+        if st.button("🔄 Rafraîchir", key=f"refresh_{sheet_name}"):
+            st.rerun()
+    
+    with tool_col2:
+        if st.button("🔀 Fusionner zones proches", key=f"merge_{sheet_name}"):
+            from utils.zone_detector import merge_zones
+            st.session_state.all_sheets_zones[sheet_name] = merge_zones(
+                st.session_state.all_sheets_zones[sheet_name], 
+                max_gap=1
+            )
+            st.success("Zones fusionnées!")
+            st.rerun()
+    
+    with tool_col3:
+        if st.button("📥 Exporter cette feuille", key=f"export_{sheet_name}"):
+            json_data = export_single_sheet_json(sheet_name)
+            st.download_button(
+                label="💾 Télécharger",
+                data=json_data,
+                file_name=f"{sheet_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+                mime="application/json"
+            )
+    
+    # Affichage avec tabs (réutiliser les fonctions existantes)
+    tab1, tab2, tab3 = st.tabs(["📋 Vue d'ensemble", "🔍 Vue détaillée", "📊 Statistiques"])
+    
+    with tab1:
+        display_overview_tab_pairs(sheet_name)
+    
+    with tab2:
+        display_detailed_tab_pairs(sheet_name)
+    
+    with tab3:
+        display_statistics_tab_pairs()
+
+def display_global_summary():
+    """Affiche un résumé global de toutes les feuilles traitées"""
+    st.markdown("### 📊 Résumé global")
+    
+    summary_data = []
+    for sheet_name, zones in st.session_state.all_sheets_zones.items():
+        total_cells = sum(z['cell_count'] for z in zones)
+        total_labels = sum(len(z.get('labels', [])) for z in zones)
+        
+        summary_data.append({
+            'Feuille': sheet_name,
+            'Zones': len(zones),
+            'Cellules': total_cells,
+            'Labels': total_labels
+        })
+    
+    df_summary = pd.DataFrame(summary_data)
+    st.dataframe(df_summary, use_container_width=True)
+    
+    # Graphiques récapitulatifs
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        fig1 = px.bar(df_summary, x='Feuille', y='Zones', 
+                      title="Nombre de zones par feuille")
+        st.plotly_chart(fig1, use_container_width=True)
+    
+    with col2:
+        fig2 = px.pie(df_summary, values='Cellules', names='Feuille',
+                      title="Répartition des cellules")
+        st.plotly_chart(fig2, use_container_width=True)
+
+def export_single_sheet_json(sheet_name):
+    """Exporte les données d'une seule feuille"""
+    zones = st.session_state.all_sheets_zones.get(sheet_name, [])
+    return export_to_json_pairs(zones, sheet_name, st.session_state.color_palette)
+
+def export_all_sheets_json():
+    """Exporte toutes les feuilles dans un format similaire à l'exemple fourni"""
+    export_data = {
+        "date_export": datetime.now().strftime("%Y-%m-%d"),
+        "color_palette": {
+            "zone_color": f"#{st.session_state.color_palette['zone_color']}",
+            "zone_name": st.session_state.color_palette['zone_name'],
+            "label_pairs": []
+        },
+        "tags": []
+    }
+    
+    # Ajouter la configuration des paires
+    for i, pair in enumerate(st.session_state.color_palette.get('label_pairs', [])):
+        export_data["color_palette"]["label_pairs"].append({
+            "pair_id": i,
+            "horizontal": {
+                "color": f"#{pair['horizontal']['color']}",
+                "name": pair['horizontal']['name']
+            },
+            "vertical": {
+                "color": f"#{pair['vertical']['color']}",
+                "name": pair['vertical']['name']
+            }
+        })
+    
+    # Parcourir toutes les feuilles et créer les tags
+    tag_id = 1
+    for sheet_name, zones in st.session_state.all_sheets_zones.items():
+        for zone in zones:
+            for cell in zone['cells']:
+                # Créer un tag pour chaque cellule de zone
+                labels = []
+                source_cells = []
+                
+                # Ajouter le nom de la feuille comme premier label
+                labels.append(sheet_name)
+                
+                # Collecter tous les labels de cette zone
+                for label in zone.get('labels', []):
+                    if label.get('value'):
+                        labels.append(str(label['value']))
+                        source_cells.append(f"{num_to_excel_col(label['col'])}{label['row']}")
+                
+                # Ajouter la cellule elle-même
+                source_cells.append(f"{num_to_excel_col(cell['col'])}{cell['row']}")
+                
+                tag = {
+                    "id": tag_id,
+                    "sheet_name": sheet_name,
+                    "row": cell['row'],
+                    "col": cell['col'],
+                    "cell_address": f"{num_to_excel_col(cell['col'])}{cell['row']}",
+                    "value": str(cell.get('value', '')),
+                    "labels": labels,
+                    "source_cells": source_cells,
+                    "zone_id": zone['id']
+                }
+                
+                export_data["tags"].append(tag)
+                tag_id += 1
+    
+    return json.dumps(export_data, indent=2, ensure_ascii=False)
+    """Configure la palette de couleurs avec système de paires"""
+    st.header("🎯 Étape 2: Configuration de la palette avec paires alternées")
+    
+    # Préparer les options de couleurs
+    color_options = {
+        f"{c['name']} (#{c['hex']})": c['hex'] 
+        for c in st.session_state.detected_colors
+    }
+    
+    # Configuration de la couleur des zones
     st.markdown("### 📦 1. Couleur des zones de données")
     zone_color = st.selectbox(
         "Cellules à labelliser (données à compléter par le LLM)",
@@ -212,94 +630,139 @@ def configure_color_palette(selected_sheet):
         help="Sélectionnez la couleur des cellules qui contiennent les données à traiter"
     )
     
-    st.markdown("### 🏷️ 2. Couleurs des labels (en-têtes)")
-    col1, col2 = st.columns(2)
+    # Configuration des paires de labels
+    st.markdown("### 🏷️ 2. Paires de labels (en-têtes alternés)")
     
-    with col1:
-        label_h_color = st.selectbox(
-            "Labels horizontaux (en-têtes de colonnes)",
-            options=list(color_options.keys()),
-            help="Couleur des cellules qui servent d'en-têtes en haut des colonnes"
-        )
+    # Nombre de paires
+    num_pairs = st.number_input("Nombre de paires de labels", min_value=1, max_value=5, value=2)
     
-    with col2:
-        label_v_color = st.selectbox(
-            "Labels verticaux (en-têtes de lignes)",
-            options=list(color_options.keys()),
-            help="Couleur des cellules qui servent d'en-têtes à gauche des lignes"
-        )
+    # Configuration de chaque paire
+    pairs = []
+    used_colors = [color_options[zone_color]]  # La couleur de zone est déjà utilisée
     
-    # Afficher un aperçu de la logique
-    with st.expander("💡 Comment ça marche ?"):
+    for i in range(num_pairs):
+        st.markdown(f"""
+        <div class="pair-container">
+            <div class="pair-header">🔗 Paire {i+1}</div>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            # Filtrer les options pour éviter les doublons
+            available_h = [opt for opt in color_options.keys() if color_options[opt] not in used_colors]
+            
+            h_color = st.selectbox(
+                f"Couleur horizontale (colonnes)",
+                options=available_h,
+                key=f"h_color_{i}",
+                help=f"Labels horizontaux pour la paire {i+1}"
+            )
+            if h_color:
+                used_colors.append(color_options[h_color])
+        
+        with col2:
+            # Filtrer les options pour éviter les doublons
+            available_v = [opt for opt in color_options.keys() if color_options[opt] not in used_colors]
+            
+            v_color = st.selectbox(
+                f"Couleur verticale (lignes)",
+                options=available_v,
+                key=f"v_color_{i}",
+                help=f"Labels verticaux pour la paire {i+1}"
+            )
+            if v_color:
+                used_colors.append(color_options[v_color])
+        
+        if h_color and v_color:
+            pairs.append({
+                'horizontal': {
+                    'color': color_options[h_color],
+                    'name': f"Headers H{i+1} ({h_color.split(' (')[0]})"
+                },
+                'vertical': {
+                    'color': color_options[v_color],
+                    'name': f"Headers V{i+1} ({v_color.split(' (')[0]})"
+                }
+            })
+    
+    # Explication du système d'alternance
+    with st.expander("💡 Comment fonctionne le système de paires alternées ?"):
         st.markdown("""
-        **Structure attendue du fichier Excel :**
+        **Principe des paires alternées :**
         
-        1. **Zones de données** : Les cellules colorées qui contiennent les valeurs à traiter
-        2. **Labels horizontaux** : Les en-têtes situés AU-DESSUS des zones (peuvent être fusionnés sur plusieurs colonnes)
-        3. **Labels verticaux** : Les en-têtes situés À GAUCHE des zones (peuvent être fusionnés sur plusieurs lignes)
+        1. **Zones de données** : Les cellules de la couleur sélectionnée qui contiennent les données à traiter
         
-        **L'application va :**
-        - Détecter toutes les zones contiguës de la couleur "données"
-        - Pour chaque zone, chercher les labels immédiatement adjacents (au-dessus et à gauche)
-        - Gérer automatiquement les cellules fusionnées
-        - Créer un mapping structuré pour le LLM
+        2. **Paires de labels** : Chaque paire contient :
+           - Une couleur pour les labels **horizontaux** (en-têtes de colonnes)
+           - Une couleur pour les labels **verticaux** (en-têtes de lignes)
+        
+        3. **Logique d'alternance** :
+           - En remontant dans une colonne, on collecte TOUS les labels horizontaux jusqu'à rencontrer un label vertical de la MÊME paire
+           - En reculant dans une ligne, on collecte TOUS les labels verticaux jusqu'à rencontrer un label horizontal de la MÊME paire
+           - Cela permet de gérer des structures complexes avec plusieurs niveaux de headers
+        
+        **Exemple concret :**
+        ```
+        [H1] [H1] [H1]  <- Paire 1 Horizontal
+        [V1] [Z]  [Z]   <- V1: Paire 1 Vertical, Z: Zone de données
+        [V1] [Z]  [Z]
+        ```
+        
+        Dans cet exemple, chaque cellule Z aura comme labels :
+        - Le H1 au-dessus (s'arrête car pas de V1 entre les deux)
+        - Le V1 à gauche (s'arrête car pas de H1 entre les deux)
         """)
     
     # Bouton de validation
     if st.button("✅ Valider et détecter les zones", type="primary"):
-        # Vérifier que les 3 couleurs sont différentes
-        selected_colors = [color_options[zone_color], color_options[label_h_color], color_options[label_v_color]]
-        
-        if len(set(selected_colors)) != 3:
-            st.error("❌ Veuillez sélectionner 3 couleurs différentes !")
-        else:
-            # Créer la palette dans le format attendu
-            label_colors = {
-                'horizontal': {
-                    'color': color_options[label_h_color],
-                    'name': f"Labels horizontaux ({label_h_color.split(' (')[0]})"
-                },
-                'vertical': {
-                    'color': color_options[label_v_color],
-                    'name': f"Labels verticaux ({label_v_color.split(' (')[0]})"
-                }
-            }
+        if len(pairs) == num_pairs and all(p['horizontal']['color'] != p['vertical']['color'] for p in pairs):
+            # Vérifier que toutes les couleurs sont uniques
+            all_colors = [color_options[zone_color]]
+            for p in pairs:
+                all_colors.extend([p['horizontal']['color'], p['vertical']['color']])
             
-            validate_and_detect_zones_flexible(
-                selected_sheet, 
-                color_options[zone_color],
-                zone_color.split(' (')[0],
-                label_colors
-            )
+            if len(all_colors) == len(set(all_colors)):
+                validate_and_detect_zones_pairs(
+                    selected_sheet, 
+                    color_options[zone_color],
+                    zone_color.split(' (')[0],
+                    pairs
+                )
+            else:
+                st.error("❌ Toutes les couleurs doivent être différentes !")
+        else:
+            st.error("❌ Veuillez configurer toutes les paires avec des couleurs différentes !")
     
     # Afficher la palette sélectionnée
     if st.session_state.color_palette:
-        display_selected_palette()
+        display_selected_palette_pairs()
 
-def validate_and_detect_zones_flexible(selected_sheet, zone_color, zone_name, label_colors):
-    """Valide la palette et lance la détection des zones avec support multi-labels"""
+def validate_and_detect_zones_pairs(selected_sheet, zone_color, zone_name, pairs):
+    """Valide la palette et lance la détection des zones avec paires alternées"""
     st.session_state.color_palette = {
         'zone_color': zone_color,
         'zone_name': zone_name,
-        'label_colors': label_colors  # Dictionnaire des couleurs de labels
+        'label_pairs': pairs
     }
+    st.session_state.label_pairs = pairs
     
     # Détecter les zones
-    with st.spinner("Détection des zones en cours..."):
-        from utils.zone_detector import detect_zones_with_flexible_palette
-        zones, all_labels = detect_zones_with_flexible_palette(
+    with st.spinner("Détection des zones avec logique de paires alternées..."):
+        zones, label_data = detect_zones_with_alternating_pairs(
             st.session_state.workbook,
             selected_sheet,
             st.session_state.color_palette,
             st.session_state.color_cells
         )
         st.session_state.zones = zones
-        st.session_state.all_labels = all_labels
-        st.success(f"✅ {len(zones)} zones détectées!")
+        st.session_state.label_data = label_data
+        st.success(f"✅ {len(zones)} zones détectées avec leurs labels alternés!")
 
-def display_selected_palette():
+def display_selected_palette_pairs():
     """Affiche la palette de couleurs sélectionnée"""
-    st.subheader("Palette sélectionnée:")
+    st.subheader("Palette configurée:")
     
     # Zone de données
     st.markdown(f"""
@@ -309,18 +772,52 @@ def display_selected_palette():
     </div>
     """, unsafe_allow_html=True)
     
-    # Labels
-    if st.session_state.color_palette.get('label_colors'):
-        for label_type, label_info in st.session_state.color_palette['label_colors'].items():
+    # Headers horizontaux
+    st.markdown("**Headers Horizontaux:**")
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        if 'h1_color' in st.session_state.color_palette:
             st.markdown(f"""
             <div style="display: flex; align-items: center; margin: 10px 0;">
-                <div class="color-preview" style="background-color: #{label_info['color']}; margin-right: 10px;"></div>
-                <strong>{label_type}:</strong> {label_info['name']}
+                <div class="color-preview" style="background-color: #{st.session_state.color_palette['h1_color']}; width: 25px; height: 25px;"></div>
+                <span>H1: {st.session_state.color_palette['h1_name']}</span>
+            </div>
+            """, unsafe_allow_html=True)
+    
+    with col2:
+        if 'h2_color' in st.session_state.color_palette:
+            st.markdown(f"""
+            <div style="display: flex; align-items: center; margin: 10px 0;">
+                <div class="color-preview" style="background-color: #{st.session_state.color_palette['h2_color']}; width: 25px; height: 25px;"></div>
+                <span>H2: {st.session_state.color_palette['h2_name']}</span>
+            </div>
+            """, unsafe_allow_html=True)
+    
+    # Headers verticaux
+    st.markdown("**Headers Verticaux:**")
+    col3, col4 = st.columns(2)
+    
+    with col3:
+        if 'v1_color' in st.session_state.color_palette:
+            st.markdown(f"""
+            <div style="display: flex; align-items: center; margin: 10px 0;">
+                <div class="color-preview" style="background-color: #{st.session_state.color_palette['v1_color']}; width: 25px; height: 25px;"></div>
+                <span>V1: {st.session_state.color_palette['v1_name']}</span>
+            </div>
+            """, unsafe_allow_html=True)
+    
+    with col4:
+        if 'v2_color' in st.session_state.color_palette:
+            st.markdown(f"""
+            <div style="display: flex; align-items: center; margin: 10px 0;">
+                <div class="color-preview" style="background-color: #{st.session_state.color_palette['v2_color']}; width: 25px; height: 25px;"></div>
+                <span>V2: {st.session_state.color_palette['v2_name']}</span>
             </div>
             """, unsafe_allow_html=True)
 
 def display_results(selected_sheet):
-    """Affiche les résultats de la détection avec contrôles améliorés"""
+    """Affiche les résultats de la détection avec visualisation adaptée aux paires"""
     st.header("📊 Visualisation et édition")
     
     # Barre d'outils
@@ -343,7 +840,7 @@ def display_results(selected_sheet):
     
     with tool_col4:
         if st.button("📥 Télécharger JSON"):
-            json_data = export_to_json(
+            json_data = export_to_json_pairs(
                 st.session_state.zones,
                 st.session_state.current_sheet,
                 st.session_state.color_palette
@@ -351,7 +848,7 @@ def display_results(selected_sheet):
             st.download_button(
                 label="💾 Télécharger",
                 data=json_data,
-                file_name=f"zones_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+                file_name=f"zones_pairs_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
                 mime="application/json"
             )
     
@@ -359,20 +856,16 @@ def display_results(selected_sheet):
     tab1, tab2, tab3 = st.tabs(["📋 Vue d'ensemble", "🔍 Vue détaillée", "📊 Statistiques"])
     
     with tab1:
-        display_overview_tab(selected_sheet)
+        display_overview_tab_pairs(selected_sheet)
     
     with tab2:
-        display_detailed_tab(selected_sheet)
+        display_detailed_tab_pairs(selected_sheet)
     
     with tab3:
-        display_statistics_tab()
-    
-    # Modal pour l'ajout manuel de zone
-    if hasattr(st.session_state, 'show_manual_zone') and st.session_state.show_manual_zone:
-        display_manual_zone_modal()
+        display_statistics_tab_pairs()
 
-def display_overview_tab(selected_sheet):
-    """Affiche l'onglet vue d'ensemble"""
+def display_overview_tab_pairs(selected_sheet):
+    """Affiche l'onglet vue d'ensemble adapté aux paires"""
     # Sous-tabs pour différentes vues
     view_tab1, view_tab2 = st.tabs(["🗺️ Vue schématique", "📋 Vue tableau"])
     
@@ -380,8 +873,8 @@ def display_overview_tab(selected_sheet):
         col1, col2 = st.columns([3, 1])
         
         with col1:
-            # Vue Plotly interactive principale
-            fig = create_excel_visualization(
+            # Vue Plotly avec adaptation pour les paires
+            fig = create_excel_visualization_pairs(
                 st.session_state.workbook,
                 selected_sheet,
                 st.session_state.zones,
@@ -390,48 +883,64 @@ def display_overview_tab(selected_sheet):
             )
             st.plotly_chart(fig, use_container_width=True)
             
-            # Légende interactive
+            # Légende adaptée aux paires
             st.markdown("### 🎯 Légende")
-            leg_cols = st.columns(min(len(st.session_state.color_palette.get('label_colors', {})) + 1, 4))
             
-            # Zone de données
-            with leg_cols[0]:
-                st.markdown(f"""
-                <div style="display: flex; align-items: center;">
-                    <div style="width: 20px; height: 20px; background-color: #{st.session_state.color_palette['zone_color']}; border: 1px solid black; margin-right: 10px;"></div>
-                    <span>Zones de données</span>
-                </div>
-                """, unsafe_allow_html=True)
+            # Zone
+            st.markdown(f"""
+            <div style="display: flex; align-items: center; margin: 5px 0;">
+                <div style="width: 20px; height: 20px; background-color: #{st.session_state.color_palette['zone_color']}; border: 1px solid black; margin-right: 10px;"></div>
+                <span>Zones de données</span>
+            </div>
+            """, unsafe_allow_html=True)
             
-            # Labels
-            if 'label_colors' in st.session_state.color_palette:
-                for i, (label_type, label_info) in enumerate(st.session_state.color_palette['label_colors'].items(), 1):
-                    if i < len(leg_cols):
-                        with leg_cols[i]:
-                            st.markdown(f"""
+            # Paires
+            if 'label_pairs' in st.session_state.color_palette:
+                for i, pair in enumerate(st.session_state.color_palette['label_pairs']):
+                    st.markdown(f"""
+                    <div style="margin-left: 20px; margin-top: 5px;">
+                        <strong>Paire {i+1}:</strong>
+                        <div style="display: flex; gap: 20px; margin-left: 20px;">
                             <div style="display: flex; align-items: center;">
-                                <div style="width: 20px; height: 20px; background-color: #{label_info['color']}; border: 1px solid black; margin-right: 10px;"></div>
-                                <span>{label_info['name']}</span>
+                                <div style="width: 15px; height: 15px; background-color: #{pair['horizontal']['color']}; border: 1px solid black; margin-right: 5px;"></div>
+                                <span style="font-size: 0.9em;">{pair['horizontal']['name']}</span>
                             </div>
-                            """, unsafe_allow_html=True)
+                            <div style="display: flex; align-items: center;">
+                                <div style="width: 15px; height: 15px; background-color: #{pair['vertical']['color']}; border: 1px solid black; margin-right: 5px;"></div>
+                                <span style="font-size: 0.9em;">{pair['vertical']['name']}</span>
+                            </div>
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
         
         with col2:
             st.markdown("### 🎮 Contrôles rapides")
             
-            # Liste des zones avec actions rapides
+            # Liste des zones avec statistiques de labels
             for zone in st.session_state.zones:
+                # Compter les labels par paire
+                label_stats = defaultdict(lambda: {'h': 0, 'v': 0})
+                for label in zone.get('labels', []):
+                    if 'pair_id' in label:
+                        if label['direction'] == 'horizontal':
+                            label_stats[label['pair_id']]['h'] += 1
+                        else:
+                            label_stats[label['pair_id']]['v'] += 1
+                
+                # Afficher la zone
                 with st.container():
-                    col_a, col_b = st.columns([3, 1])
-                    with col_a:
-                        if st.button(f"Zone {zone['id']} ({zone['cell_count']} cellules)", 
-                                    key=f"select_zone_{zone['id']}",
-                                    use_container_width=True):
-                            st.session_state.selected_zone = zone['id']
-                            st.rerun()
-                    with col_b:
-                        if st.button("❌", key=f"delete_zone_{zone['id']}", help="Supprimer"):
-                            st.session_state.zones = [z for z in st.session_state.zones if z['id'] != zone['id']]
-                            st.rerun()
+                    if st.button(f"Zone {zone['id']} ({zone['cell_count']} cellules)", 
+                                key=f"select_zone_{zone['id']}",
+                                use_container_width=True):
+                        st.session_state.selected_zone = zone['id']
+                        st.rerun()
+                    
+                    # Afficher les stats de labels
+                    if label_stats:
+                        stats_text = []
+                        for pair_id, stats in sorted(label_stats.items()):
+                            stats_text.append(f"P{pair_id+1}: {stats['h']}H/{stats['v']}V")
+                        st.caption(" | ".join(stats_text))
     
     with view_tab2:
         st.markdown("### 📊 Vue tableau avec contenu des cellules")
@@ -443,10 +952,9 @@ def display_overview_tab(selected_sheet):
         with col2:
             max_rows = st.number_input("Nombre de lignes max", min_value=10, max_value=200, value=50)
         
-        # Créer la vue tableau
-        from utils.visualization import create_dataframe_view
+        # Créer la vue tableau avec adaptation pour les paires
         try:
-            df_styled = create_dataframe_view(
+            df_styled = create_dataframe_view_pairs(
                 st.session_state.workbook,
                 selected_sheet,
                 st.session_state.zones if show_colors else None,
@@ -465,8 +973,8 @@ def display_overview_tab(selected_sheet):
             st.error(f"Erreur lors de la création de la vue tableau: {str(e)}")
             st.info("Essayez de réduire le nombre de lignes à afficher.")
 
-def display_detailed_tab(selected_sheet):
-    """Affiche l'onglet vue détaillée avec zoom, tableau et analyse comparative"""
+def display_detailed_tab_pairs(selected_sheet):
+    """Affiche l'onglet vue détaillée pour les paires"""
     if not st.session_state.selected_zone:
         st.info("👆 Sélectionnez une zone dans l'onglet 'Vue d'ensemble' pour voir les détails")
         return
@@ -488,30 +996,26 @@ def display_detailed_tab(selected_sheet):
             st.session_state.selected_zone = min(len(st.session_state.zones), zone['id'] + 1)
             st.rerun()
     
-    # NOUVEAU: Tabs pour différentes vues de la zone
+    # TABS pour différentes vues de la zone
     detail_view_tab1, detail_view_tab2, detail_view_tab3 = st.tabs([
         "🗺️ Vue schématique", 
         "📋 Vue tableau", 
-        "🔍 Analyse comparative"
+        "📊 Labels par paire"
     ])
     
     with detail_view_tab1:
-        # Vue schématique existante (Plotly)
+        # Vue schématique (Plotly)
         st.markdown("#### 🔍 Vue zoomée de la zone")
-        from utils.visualization import create_zone_detail_view
-        zoom_fig = create_zone_detail_view(
+        zoom_fig = create_zone_detail_view_pairs(
             st.session_state.workbook,
             selected_sheet,
             zone,
             st.session_state.color_palette
         )
         st.plotly_chart(zoom_fig, use_container_width=True)
-        
-        # Note sur les problèmes d'affichage
-        st.info("💡 **Problème d'affichage des zones ?** Essayez la vue tableau qui fonctionne parfaitement.")
     
     with detail_view_tab2:
-        # NOUVELLE: Vue tableau détaillée
+        # Vue tableau détaillée
         st.markdown("#### 📋 Vue tableau de la zone")
         
         # Options d'affichage
@@ -525,16 +1029,15 @@ def display_detailed_tab(selected_sheet):
         
         try:
             if table_style == "Avec marqueurs":
-                from utils.visualization import create_zone_detail_table_view_enhanced
-                styled_table = create_zone_detail_table_view_enhanced(
+                styled_table = create_zone_detail_table_view_pairs_enhanced(
                     st.session_state.workbook,
                     selected_sheet,
                     zone,
-                    st.session_state.color_palette
+                    st.session_state.color_palette,
+                    show_markers
                 )
             else:
-                from utils.visualization import create_zone_detail_table_view
-                styled_table = create_zone_detail_table_view(
+                styled_table = create_zone_detail_table_view_pairs(
                     st.session_state.workbook,
                     selected_sheet,
                     zone,
@@ -550,26 +1053,37 @@ def display_detailed_tab(selected_sheet):
             # Légende
             if show_legend:
                 st.markdown("#### 🎨 Légende")
-                leg_col1, leg_col2 = st.columns(2)
                 
-                with leg_col1:
-                    zone_color = st.session_state.color_palette['zone_color']
-                    st.markdown(f"""
-                    <div style="display: flex; align-items: center; margin: 5px 0;">
-                        <div style="width: 20px; height: 20px; background-color: #{zone_color}; opacity: 0.3; border: 3px solid #{zone_color}; margin-right: 10px;"></div>
-                        <span>🔵 Cellules de zone</span>
-                    </div>
-                    """, unsafe_allow_html=True)
+                # Zone
+                zone_color = st.session_state.color_palette['zone_color']
+                st.markdown(f"""
+                <div style="display: flex; align-items: center; margin: 5px 0;">
+                    <div style="width: 20px; height: 20px; background-color: #{zone_color}; opacity: 0.3; border: 3px solid #{zone_color}; margin-right: 10px;"></div>
+                    <span>🔵 Cellules de zone</span>
+                </div>
+                """, unsafe_allow_html=True)
                 
-                with leg_col2:
-                    if 'label_colors' in st.session_state.color_palette:
-                        for label_type, label_info in st.session_state.color_palette['label_colors'].items():
-                            marker = "🏷️" if label_type == 'horizontal' else "📍"
-                            color = label_info['color']
+                # Paires
+                if 'label_pairs' in st.session_state.color_palette:
+                    for i, pair in enumerate(st.session_state.color_palette['label_pairs']):
+                        st.markdown(f"**Paire {i+1}:**")
+                        leg_col1, leg_col2 = st.columns(2)
+                        
+                        with leg_col1:
+                            h_color = pair['horizontal']['color']
                             st.markdown(f"""
                             <div style="display: flex; align-items: center; margin: 5px 0;">
-                                <div style="width: 20px; height: 20px; background-color: #{color}; opacity: 0.5; border: 2px solid #{color}; margin-right: 10px;"></div>
-                                <span>{marker} {label_info['name']}</span>
+                                <div style="width: 20px; height: 20px; background-color: #{h_color}; opacity: 0.5; border: 2px solid #{h_color}; margin-right: 10px;"></div>
+                                <span>➡️ {pair['horizontal']['name']}</span>
+                            </div>
+                            """, unsafe_allow_html=True)
+                        
+                        with leg_col2:
+                            v_color = pair['vertical']['color']
+                            st.markdown(f"""
+                            <div style="display: flex; align-items: center; margin: 5px 0;">
+                                <div style="width: 20px; height: 20px; background-color: #{v_color}; opacity: 0.5; border: 2px solid #{v_color}; margin-right: 10px;"></div>
+                                <span>⬇️ {pair['vertical']['name']}</span>
                             </div>
                             """, unsafe_allow_html=True)
         
@@ -578,96 +1092,63 @@ def display_detailed_tab(selected_sheet):
             st.info("Essayez de réduire la taille de la zone ou vérifiez vos données.")
     
     with detail_view_tab3:
-        # NOUVELLE: Analyse comparative
-        st.markdown("#### 🔍 Analyse comparative détaillée")
+        # Tableau des labels avec regroupement par paire
+        st.markdown("#### 📊 Labels identifiés (par paire)")
         
-        st.info("Cette analyse compare les données détectées avec la réalité du fichier Excel.")
-        
-        try:
-            from utils.visualization import display_zone_comparison_table
-            zone_df, label_df = display_zone_comparison_table(
-                st.session_state.workbook,
-                selected_sheet,
-                zone,
-                st.session_state.color_palette
-            )
+        if zone.get('labels'):
+            # Regrouper les labels par paire et direction
+            labels_by_pair = defaultdict(lambda: {'horizontal': [], 'vertical': []})
             
-            if not zone_df.empty:
-                st.markdown("##### 🔵 Analyse des cellules de zone")
-                st.dataframe(zone_df, use_container_width=True)
+            for label in zone['labels']:
+                if 'pair_id' in label:
+                    labels_by_pair[label['pair_id']][label['direction']].append(label)
+            
+            # Afficher chaque paire
+            for pair_id in sorted(labels_by_pair.keys()):
+                pair_labels = labels_by_pair[pair_id]
+                pair_name = f"Paire {pair_id + 1}"
                 
-                # Statistiques
-                matches = zone_df['Correspondance'].str.count('✅').sum()
-                total = len(zone_df)
-                st.metric("Correspondances couleurs", f"{matches}/{total}", f"{matches/total*100:.1f}%" if total > 0 else "0%")
-            
-            if not label_df.empty:
-                st.markdown("##### 🏷️ Analyse des labels")
-                st.dataframe(label_df, use_container_width=True)
+                if pair_id < len(st.session_state.color_palette.get('label_pairs', [])):
+                    pair_config = st.session_state.color_palette['label_pairs'][pair_id]
                 
-                # Statistiques
-                matches = label_df['Correspondance'].str.count('✅').sum()
-                total = len(label_df)
-                st.metric("Correspondances labels", f"{matches}/{total}", f"{matches/total*100:.1f}%" if total > 0 else "0%")
-            
-            # Diagnostic
-            st.markdown("##### 🎯 Diagnostic")
-            
-            if zone_df.empty and label_df.empty:
-                st.warning("Aucune donnée à analyser pour cette zone")
-            elif zone_df['Correspondance'].str.count('❌').sum() > 0:
-                st.error("❌ Problèmes de correspondance couleurs détectés dans les cellules de zone")
-                st.markdown("**Recommandations:**")
-                st.write("- Vérifiez que les couleurs sélectionnées dans la palette correspondent exactement aux couleurs Excel")
-                st.write("- Essayez de recalculer la détection des couleurs")
-                st.write("- Vérifiez que les cellules ne sont pas fusionnées de manière inattendue")
-            else:
-                st.success("✅ Toutes les correspondances sont correctes")
-        
-        except Exception as e:
-            st.error(f"Erreur lors de l'analyse comparative: {str(e)}")
+                with st.expander(f"🔗 {pair_name} ({len(pair_labels['horizontal'])} H, {len(pair_labels['vertical'])} V)"):
+                    col1, col2 = st.columns(2)
+                    
+                    # Labels horizontaux
+                    with col1:
+                        st.markdown("**Labels Horizontaux**")
+                        if pair_labels['horizontal']:
+                            h_data = []
+                            for label in pair_labels['horizontal']:
+                                from utils.excel_utils import num_to_excel_col
+                                h_data.append({
+                                    'Position': f"{num_to_excel_col(label['col'])}{label['row']}",
+                                    'Valeur': label.get('value', ''),
+                                    'Distance': label.get('distance', 0)
+                                })
+                            st.dataframe(pd.DataFrame(h_data), use_container_width=True)
+                        else:
+                            st.info("Aucun label horizontal")
+                    
+                    # Labels verticaux
+                    with col2:
+                        st.markdown("**Labels Verticaux**")
+                        if pair_labels['vertical']:
+                            v_data = []
+                            for label in pair_labels['vertical']:
+                                from utils.excel_utils import num_to_excel_col
+                                v_data.append({
+                                    'Position': f"{num_to_excel_col(label['col'])}{label['row']}",
+                                    'Valeur': label.get('value', ''),
+                                    'Distance': label.get('distance', 0)
+                                })
+                            st.dataframe(pd.DataFrame(v_data), use_container_width=True)
+                        else:
+                            st.info("Aucun label vertical")
+        else:
+            st.warning("Aucun label identifié pour cette zone")
     
-    # EXISTANT: Tableau récapitulatif des labels (conservé pour compatibilité)
-    st.markdown("#### 📊 Tableau des labels identifiés")
-    if zone.get('labels'):
-        from utils.excel_utils import num_to_excel_col
-        # Créer un DataFrame pour les labels
-        labels_data = []
-        for label in zone['labels']:
-            # Déterminer le nom du type de label
-            label_type_name = label['type']
-            if 'label_colors' in st.session_state.color_palette:
-                for lt, linfo in st.session_state.color_palette['label_colors'].items():
-                    if label['type'] == lt:
-                        label_type_name = linfo['name']
-                        break
-            
-            labels_data.append({
-                'Position': f"{num_to_excel_col(label['col'])}{label['row']}",
-                'Valeur': label['value'],
-                'Type': label_type_name,
-                'Direction': 'Colonne' if label['position'] == 'top' else 'Ligne',
-                'Distance': label.get('distance', 1),
-                'Appliqué à': len(label.get('for_cells', []))
-            })
-        
-        labels_df = pd.DataFrame(labels_data)
-        st.dataframe(labels_df, use_container_width=True)
-        
-        # Statistiques des labels
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.metric("Total labels", len(labels_data))
-        with col2:
-            h_count = sum(1 for l in labels_data if l['Direction'] == 'Colonne')
-            st.metric("Labels colonnes", h_count)
-        with col3:
-            v_count = sum(1 for l in labels_data if l['Direction'] == 'Ligne')
-            st.metric("Labels lignes", v_count)
-    else:
-        st.warning("Aucun label identifié pour cette zone")
-    
-    # EXISTANT: Informations de la zone (conservé)
+    # Informations de la zone
     st.markdown("#### 📍 Informations de la zone")
     info_col1, info_col2 = st.columns(2)
     
@@ -678,7 +1159,6 @@ def display_detailed_tab(selected_sheet):
         st.write(f"**Nombre de cellules:** {zone['cell_count']}")
     
     with info_col2:
-        # Afficher un échantillon des valeurs de la zone
         st.write("**Échantillon de valeurs:**")
         sample_values = []
         for cell in zone['cells'][:5]:
@@ -688,90 +1168,9 @@ def display_detailed_tab(selected_sheet):
             st.write("\n".join(sample_values))
         else:
             st.write("(cellules vides)")
-    
-    # EXISTANT: Actions sur la zone (conservé)
-    st.markdown("#### 🛠️ Actions")
-    
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        with st.expander("➕ Ajouter un label"):
-            new_label_value = st.text_input("Valeur du label", key=f"new_label_{zone['id']}")
-            
-            # Types de labels disponibles
-            label_types = list(st.session_state.color_palette.get('label_colors', {}).keys())
-            if label_types:
-                new_label_type = st.selectbox("Type", label_types, key=f"new_label_type_{zone['id']}")
-            else:
-                st.warning("Aucun type de label défini dans la palette")
-                new_label_type = None
-                
-            new_label_pos = st.selectbox("Position", ["top", "left", "bottom", "right"], key=f"new_label_pos_{zone['id']}")
-            
-            if st.button("Ajouter", key=f"add_label_{zone['id']}") and new_label_type:
-                if new_label_value:
-                    # Calculer la position du nouveau label
-                    if new_label_pos == "top":
-                        row = zone['bounds']['min_row'] - 1
-                        col = zone['bounds']['min_col']
-                    elif new_label_pos == "left":
-                        row = zone['bounds']['min_row']
-                        col = zone['bounds']['min_col'] - 1
-                    elif new_label_pos == "bottom":
-                        row = zone['bounds']['max_row'] + 1
-                        col = zone['bounds']['min_col']
-                    else:  # right
-                        row = zone['bounds']['min_row']
-                        col = zone['bounds']['max_col'] + 1
-                    
-                    new_label = {
-                        'row': row,
-                        'col': col,
-                        'value': new_label_value,
-                        'type': new_label_type,
-                        'position': new_label_pos,
-                        'color': st.session_state.color_palette['label_colors'][new_label_type]['color']
-                    }
-                    
-                    if 'labels' not in zone:
-                        zone['labels'] = []
-                    zone['labels'].append(new_label)
-                    st.success("Label ajouté!")
-                    st.rerun()
-    
-    with col2:
-        with st.expander("📏 Modifier les limites"):
-            new_min_row = st.number_input("Ligne min", value=zone['bounds']['min_row'], min_value=1, key=f"min_row_{zone['id']}")
-            new_max_row = st.number_input("Ligne max", value=zone['bounds']['max_row'], min_value=1, key=f"max_row_{zone['id']}")
-            new_min_col = st.number_input("Colonne min", value=zone['bounds']['min_col'], min_value=1, key=f"min_col_{zone['id']}")
-            new_max_col = st.number_input("Colonne max", value=zone['bounds']['max_col'], min_value=1, key=f"max_col_{zone['id']}")
-            
-            if st.button("Appliquer", key=f"apply_bounds_{zone['id']}"):
-                zone['bounds']['min_row'] = int(new_min_row)
-                zone['bounds']['max_row'] = int(new_max_row)
-                zone['bounds']['min_col'] = int(new_min_col)
-                zone['bounds']['max_col'] = int(new_max_col)
-                # Recalculer le nombre de cellules
-                zone['cell_count'] = (new_max_row - new_min_row + 1) * (new_max_col - new_min_col + 1)
-                st.success("Limites modifiées!")
-                st.rerun()
-    
-    with col3:
-        with st.expander("🔧 Autres actions"):
-            if st.button("📋 Dupliquer la zone", key=f"duplicate_{zone['id']}"):
-                new_zone = zone.copy()
-                new_zone['id'] = max(z['id'] for z in st.session_state.zones) + 1
-                st.session_state.zones.append(new_zone)
-                st.success(f"Zone dupliquée (ID: {new_zone['id']})")
-                st.rerun()
-            
-            if st.button("🗑️ Supprimer la zone", key=f"delete_detailed_{zone['id']}", type="secondary"):
-                st.session_state.zones = [z for z in st.session_state.zones if z['id'] != zone['id']]
-                st.session_state.selected_zone = None
-                st.rerun()
 
-def display_statistics_tab():
-    """Affiche l'onglet statistiques"""
+def display_statistics_tab_pairs():
+    """Affiche les statistiques adaptées aux paires"""
     if not st.session_state.zones:
         st.info("Aucune zone détectée pour afficher les statistiques")
         return
@@ -782,147 +1181,728 @@ def display_statistics_tab():
     total_zones = len(st.session_state.zones)
     total_cells = sum(z['cell_count'] for z in st.session_state.zones)
     total_labels = sum(len(z.get('labels', [])) for z in st.session_state.zones)
-    avg_cells_per_zone = total_cells / total_zones if total_zones > 0 else 0
+    num_pairs = len(st.session_state.color_palette.get('label_pairs', []))
     
     col1.metric("📦 Zones", total_zones)
     col2.metric("📋 Cellules totales", total_cells)
     col3.metric("🏷️ Labels totaux", total_labels)
-    col4.metric("📊 Moy. cellules/zone", f"{avg_cells_per_zone:.1f}")
+    col4.metric("🔗 Paires configurées", num_pairs)
     
     # Graphiques
-    st.markdown("### 📊 Analyse détaillée")
+    st.markdown("### 📊 Analyse par paire")
     
-    chart_col1, chart_col2 = st.columns(2)
+    # Compter les labels par paire et direction
+    pair_stats = defaultdict(lambda: {'horizontal': 0, 'vertical': 0})
     
-    with chart_col1:
-        # Distribution des tailles de zones
-        zone_sizes = [z['cell_count'] for z in st.session_state.zones]
-        df_sizes = pd.DataFrame({
-            'Zone': [f"Zone {z['id']}" for z in st.session_state.zones],
-            'Taille': zone_sizes
-        })
-        
-        fig1 = px.bar(df_sizes, x='Zone', y='Taille', 
-                      title="Taille des zones (nombre de cellules)")
-        st.plotly_chart(fig1, use_container_width=True)
+    for zone in st.session_state.zones:
+        for label in zone.get('labels', []):
+            if 'pair_id' in label:
+                pair_stats[label['pair_id']][label['direction']] += 1
     
-    with chart_col2:
-        # Distribution des types de labels
-        label_counts = defaultdict(int)
-        label_names = {}
-        
-        # Compter les labels selon le format de palette
-        if 'label_colors' in st.session_state.color_palette:
-            # Format flexible
-            for zone in st.session_state.zones:
-                for label in zone.get('labels', []):
-                    label_counts[label['type']] += 1
+    # Créer le graphique
+    if pair_stats:
+        data = []
+        for pair_id in sorted(pair_stats.keys()):
+            stats = pair_stats[pair_id]
+            pair_name = f"Paire {pair_id + 1}"
             
-            # Noms des labels
-            for label_type, label_info in st.session_state.color_palette['label_colors'].items():
-                label_names[label_type] = label_info['name']
-        else:
-            # Ancien format (rétrocompatibilité)
-            for zone in st.session_state.zones:
-                for label in zone.get('labels', []):
-                    label_counts[label['type']] += 1
-            
-            label_names = {
-                'label1': st.session_state.color_palette.get('label1_name', 'Label 1'),
-                'label2': st.session_state.color_palette.get('label2_name', 'Label 2')
-            }
-        
-        # Créer le DataFrame pour le graphique
-        if label_counts:
-            df_labels = pd.DataFrame({
-                'Type': [label_names.get(lt, lt) for lt in label_counts.keys()],
-                'Nombre': list(label_counts.values())
+            data.append({
+                'Paire': pair_name,
+                'Type': 'Horizontal',
+                'Nombre': stats['horizontal']
             })
-            
-            fig2 = px.pie(df_labels, values='Nombre', names='Type',
-                          title="Répartition des types de labels")
-            st.plotly_chart(fig2, use_container_width=True)
-        else:
-            st.info("Aucun label détecté dans les zones")
+            data.append({
+                'Paire': pair_name,
+                'Type': 'Vertical',
+                'Nombre': stats['vertical']
+            })
+        
+        df_pairs = pd.DataFrame(data)
+        
+        fig = px.bar(df_pairs, x='Paire', y='Nombre', color='Type',
+                     title="Distribution des labels par paire et direction",
+                     barmode='group')
+        st.plotly_chart(fig, use_container_width=True)
     
-    # Tableau récapitulatif
-    st.markdown("### 📋 Tableau récapitulatif")
-    from utils.visualization import create_zone_summary_dataframe
-    summary_df = create_zone_summary_dataframe(st.session_state.zones)
-    st.dataframe(summary_df, use_container_width=True)
+    # Tableau récapitulatif des zones
+    st.markdown("### 📋 Détail par zone")
+    
+    zone_data = []
+    for zone in st.session_state.zones:
+        # Compter les labels par paire pour cette zone
+        zone_pair_stats = defaultdict(lambda: {'h': 0, 'v': 0})
+        for label in zone.get('labels', []):
+            if 'pair_id' in label:
+                if label['direction'] == 'horizontal':
+                    zone_pair_stats[label['pair_id']]['h'] += 1
+                else:
+                    zone_pair_stats[label['pair_id']]['v'] += 1
+        
+        # Créer un résumé textuel
+        pair_summary = []
+        for pair_id in sorted(zone_pair_stats.keys()):
+            stats = zone_pair_stats[pair_id]
+            pair_summary.append(f"P{pair_id+1}: {stats['h']}H/{stats['v']}V")
+        
+        from utils.excel_utils import num_to_excel_col
+        zone_data.append({
+            'Zone': zone['id'],
+            'Cellules': zone['cell_count'],
+            'Position': f"{num_to_excel_col(zone['bounds']['min_col'])}{zone['bounds']['min_row']} - {num_to_excel_col(zone['bounds']['max_col'])}{zone['bounds']['max_row']}",
+            'Labels totaux': len(zone.get('labels', [])),
+            'Répartition': " | ".join(pair_summary) if pair_summary else "Aucun label"
+        })
+    
+    st.dataframe(pd.DataFrame(zone_data), use_container_width=True)
 
-def display_manual_zone_modal():
-    """Affiche le modal pour créer une zone manuellement"""
-    with st.container():
-        st.markdown("### ➕ Créer une zone manuellement")
+def load_workbook_with_values(file):
+    """
+    Charge un fichier Excel avec les valeurs calculées (pas les formules)
+    """
+    import openpyxl
+    import xlrd
+    import tempfile
+    import os
+    
+    # Déterminer le type de fichier
+    filename = file.name.lower()
+    
+    if filename.endswith('.xlsx'):
+        # Fichier .xlsx - utiliser openpyxl avec data_only=True
+        return openpyxl.load_workbook(file, data_only=True)
+    
+    elif filename.endswith('.xls'):
+        # Fichier .xls - xlrd retourne déjà les valeurs calculées
+        return convert_xls_to_openpyxl_values(file)
+    
+    else:
+        raise ValueError("Format de fichier non supporté. Utilisez .xlsx ou .xls")
+
+def convert_xls_to_openpyxl_values(file):
+    """
+    Convertit un fichier .xls en workbook openpyxl avec les valeurs
+    """
+    import xlrd
+    import openpyxl
+    
+    # Lire le fichier .xls avec xlrd
+    xls_book = xlrd.open_workbook(file_contents=file.read(), formatting_info=True)
+    
+    # Créer un nouveau workbook openpyxl
+    wb = openpyxl.Workbook()
+    wb.remove(wb.active)  # Supprimer la feuille par défaut
+    
+    # Obtenir les informations de formatage
+    xf_list = xls_book.format_map
+    
+    # Parcourir toutes les feuilles
+    for sheet_idx, sheet_name in enumerate(xls_book.sheet_names()):
+        xls_sheet = xls_book.sheet_by_name(sheet_name)
+        ws = wb.create_sheet(title=sheet_name)
         
-        col1, col2 = st.columns(2)
-        with col1:
-            man_min_row = st.number_input("Ligne début", min_value=1, value=1, key="manual_min_row")
-            man_max_row = st.number_input("Ligne fin", min_value=1, value=1, key="manual_max_row")
-        with col2:
-            man_min_col = st.text_input("Colonne début (ex: A)", value="A", key="manual_min_col")
-            man_max_col = st.text_input("Colonne fin (ex: B)", value="B", key="manual_max_col")
-        
-        col3, col4 = st.columns(2)
-        with col3:
-            if st.button("✅ Créer", type="primary"):
-                try:
-                    from utils.excel_utils import excel_col_to_num
-                    min_col_num = excel_col_to_num(man_min_col)
-                    max_col_num = excel_col_to_num(man_max_col)
+        # Copier les données et le formatage
+        for row_idx in range(xls_sheet.nrows):
+            for col_idx in range(xls_sheet.ncols):
+                cell = xls_sheet.cell(row_idx, col_idx)
+                
+                # Écrire la valeur (xlrd retourne déjà les valeurs calculées)
+                ws.cell(row=row_idx + 1, column=col_idx + 1, value=cell.value)
+                
+                # Appliquer le formatage si disponible
+                if cell.xf_index is not None and cell.xf_index < len(xf_list):
+                    xf = xf_list[cell.xf_index]
                     
-                    new_zone = {
-                        'id': max([z['id'] for z in st.session_state.zones], default=0) + 1,
-                        'cells': [],
-                        'bounds': {
-                            'min_row': int(man_min_row),
-                            'max_row': int(man_max_row),
-                            'min_col': min_col_num,
-                            'max_col': max_col_num
-                        },
-                        'cell_count': (int(man_max_row) - int(man_min_row) + 1) * (max_col_num - min_col_num + 1),
-                        'labels': []
-                    }
-                    
-                    st.session_state.zones.append(new_zone)
-                    st.session_state.show_manual_zone = False
-                    st.success(f"Zone {new_zone['id']} créée!")
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Erreur: {str(e)}")
-        
-        with col4:
-            if st.button("❌ Annuler"):
-                st.session_state.show_manual_zone = False
-                st.rerun()
+                    # Extraire la couleur de fond si elle existe
+                    if xf.background and hasattr(xf.background, 'pattern_colour_index'):
+                        color_idx = xf.background.pattern_colour_index
+                        if color_idx and color_idx < len(xls_book.colour_map):
+                            rgb = xls_book.colour_map.get(color_idx)
+                            if rgb:
+                                # Convertir RGB en hex
+                                hex_color = '%02x%02x%02x' % rgb[:3]
+                                from openpyxl.styles import PatternFill
+                                fill = PatternFill(start_color=hex_color, 
+                                                 end_color=hex_color, 
+                                                 fill_type="solid")
+                                ws.cell(row=row_idx + 1, column=col_idx + 1).fill = fill
+    
+    return wb
 
 def display_instructions():
-    """Affiche les instructions d'utilisation"""
-    with st.expander("ℹ️ Guide d'utilisation"):
+    """Affiche les instructions d'utilisation pour le système de paires"""
+    with st.expander("ℹ️ Guide d'utilisation - Système de paires alternées"):
         st.markdown("""
-        ## 🚀 Comment utiliser l'application
+        ## 🚀 Comment utiliser l'application avec les paires alternées
         
-        ### 1. Analyse des couleurs
-        - **Chargez votre fichier Excel** (.xlsx ou .xls)
-        - **Sélectionnez la feuille** à analyser
-        - **Cliquez sur "Analyser les couleurs"** pour détecter toutes les couleurs
+        ### 📋 Concept des paires alternées
         
-        ### 2. Configuration de la palette
-        - **Zones de données** : Cellules à remplir par le LLM
-        - **Labels type 1** : Première couleur de labels
-        - **Labels type 2** : Deuxième couleur de labels
-        - **Validez la palette** pour lancer la détection
+        Cette version avancée permet de gérer des structures Excel complexes avec plusieurs niveaux de headers qui s'alternent.
         
-        ### 3. Visualisation et édition
-        - Les zones sont entourées et numérotées
-        - Sélectionnez une zone pour voir ses détails
-        - Supprimez les zones incorrectes
+        ### 1. Structure attendue
         
-        ### 4. Export
-        - **Téléchargez le JSON** avec toutes les informations
-        - Format compatible avec votre chatbot
+        ```
+        [H1] [H1] [H1] [H2] [H2]  <- Headers horizontaux alternés
+        [V1] [Z]  [Z]  [V2] [Z]   <- V1/V2: Headers verticaux, Z: Zones
+        [V1] [Z]  [Z]  [V2] [Z]
+        ```
+        
+        ### 2. Logique de détection
+        
+        - **Remontée verticale** : Pour chaque cellule de zone, on remonte dans la colonne pour collecter TOUS les headers horizontaux jusqu'à rencontrer un header vertical de la MÊME paire
+        - **Recul horizontal** : On recule dans la ligne pour collecter TOUS les headers verticaux jusqu'à rencontrer un header horizontal de la MÊME paire
+        
+        ### 3. Avantages
+        
+        - ✅ Gère les structures multi-niveaux
+        - ✅ Supporte l'alternance de différents types de headers
+        - ✅ Permet une extraction plus précise et contextuelle
+        - ✅ Adapté aux tableaux Excel complexes avec sous-catégories
+        
+        ### 4. Configuration
+        
+        1. **Analyser les couleurs** du fichier Excel (toutes les feuilles)
+        2. **Définir la couleur des zones** de données
+        3. **Configurer les paires** :
+           - Chaque paire = 1 couleur horizontale + 1 couleur verticale
+           - Les paires peuvent s'alterner dans le document
+        4. **Traiter** les feuilles individuellement ou toutes à la fois
+        
+        ### 5. Export
+        
+        Le JSON exporté contiendra :
+        - Un tag par cellule de zone
+        - Tous les labels associés à chaque cellule
+        - La structure complète pour reconstruction par le LLM
+        - Format optimisé pour l'extraction de données
         """)
+    """Affiche les instructions d'utilisation pour le système de paires"""
+    with st.expander("ℹ️ Guide d'utilisation - Système de paires alternées"):
+        st.markdown("""
+        ## 🚀 Comment utiliser l'application avec les paires alternées
+        
+        ### 📋 Concept des paires alternées
+        
+        Cette version avancée permet de gérer des structures Excel complexes avec plusieurs niveaux de headers qui s'alternent.
+        
+        ### 1. Structure attendue
+        
+        ```
+        [H1] [H1] [H1] [H2] [H2]  <- Headers horizontaux alternés
+        [V1] [Z]  [Z]  [V2] [Z]   <- V1/V2: Headers verticaux, Z: Zones
+        [V1] [Z]  [Z]  [V2] [Z]
+        ```
+        
+        ### 2. Logique de détection
+        
+        - **Remontée verticale** : Pour chaque cellule de zone, on remonte dans la colonne pour collecter TOUS les headers horizontaux jusqu'à rencontrer un header vertical de la MÊME paire
+        - **Recul horizontal** : On recule dans la ligne pour collecter TOUS les headers verticaux jusqu'à rencontrer un header horizontal de la MÊME paire
+        
+        ### 3. Avantages
+        
+        - ✅ Gère les structures multi-niveaux
+        - ✅ Supporte l'alternance de différents types de headers
+        - ✅ Permet une extraction plus précise et contextuelle
+        - ✅ Adapté aux tableaux Excel complexes avec sous-catégories
+        
+        ### 4. Configuration
+        
+        1. **Analyser les couleurs** du fichier Excel
+        2. **Définir la couleur des zones** de données
+        3. **Configurer les paires** :
+           - Chaque paire = 1 couleur horizontale + 1 couleur verticale
+           - Les paires peuvent s'alterner dans le document
+        4. **Valider** pour lancer la détection
+        
+        ### 5. Export
+        
+        Le JSON exporté contiendra :
+        - Les zones détectées
+        - Pour chaque zone, tous ses labels organisés par paire
+        - La structure complète pour reconstruction par le LLM
+        """)
+
+# Fonctions auxiliaires pour l'affichage adapté aux paires
+
+def create_excel_visualization_pairs(workbook, sheet_name, zones, selected_zone, color_palette):
+    """Crée une visualisation adaptée aux paires de labels"""
+    # Utiliser la fonction de base en adaptant le mapping des couleurs
+    adapted_palette = {
+        'zone_color': color_palette['zone_color'],
+        'zone_name': color_palette['zone_name'],
+        'label_colors': {}
+    }
+    
+    # Convertir les paires en format compatible
+    # IMPORTANT: Mapper les types de labels correctement
+    for i, pair in enumerate(color_palette.get('label_pairs', [])):
+        # Les labels ont des types comme 'h_pair_0', 'v_pair_0' dans zone_detector
+        adapted_palette['label_colors'][f'h_pair_{i}'] = pair['horizontal']
+        adapted_palette['label_colors'][f'v_pair_{i}'] = pair['vertical']
+    
+    # Debug
+    print(f"DEBUG visualization: adapted_palette = {adapted_palette}")
+    
+    # Vérifier si on a des labels dans les zones
+    total_labels = sum(len(z.get('labels', [])) for z in zones)
+    print(f"DEBUG visualization: Total labels in zones = {total_labels}")
+    
+    return create_excel_visualization(workbook, sheet_name, zones, selected_zone, adapted_palette)
+
+def create_zone_detail_view_pairs(workbook, sheet_name, zone, color_palette):
+    """Crée une vue détaillée adaptée aux paires"""
+    # Adapter le format pour réutiliser la fonction existante
+    adapted_palette = {
+        'zone_color': color_palette['zone_color'],
+        'zone_name': color_palette['zone_name'],
+        'label_colors': {}
+    }
+    
+    # Créer un mapping pour toutes les couleurs de labels
+    for i, pair in enumerate(color_palette.get('label_pairs', [])):
+        adapted_palette['label_colors'][f'h_pair_{i}'] = pair['horizontal']
+        adapted_palette['label_colors'][f'v_pair_{i}'] = pair['vertical']
+    
+    return create_zone_detail_view(workbook, sheet_name, zone, adapted_palette)
+
+def create_dataframe_view_pairs(workbook, sheet_name: str, zones: List[Dict] = None, 
+                               color_palette: Optional[Dict] = None, max_rows: int = 50) -> pd.DataFrame:
+    """
+    Crée une vue DataFrame stylée de la feuille Excel avec coloration des zones et paires
+    """
+    from utils.excel_utils import num_to_excel_col, excel_col_to_num
+    from utils.color_detector import hex_to_rgb
+    
+    ws = workbook[sheet_name]
+    
+    # Limiter les dimensions pour la performance
+    max_row = min(ws.max_row, max_rows)
+    max_col = min(ws.max_column, 26)
+    
+    # Créer un mapping des cellules colorées
+    colored_cells = {}
+    if zones and color_palette:
+        for zone in zones:
+            # Cellules de la zone
+            for cell in zone['cells']:
+                if cell['row'] <= max_row and cell['col'] <= max_col:
+                    colored_cells[(cell['row'], cell['col'])] = {
+                        'color': color_palette['zone_color'],
+                        'type': 'zone',
+                        'zone_id': zone['id']
+                    }
+            
+            # Labels de la zone avec gestion des paires
+            for label in zone.get('labels', []):
+                if label['row'] <= max_row and label['col'] <= max_col:
+                    # Déterminer la couleur du label selon la paire
+                    label_color = '#888888'  # Couleur par défaut
+                    
+                    if 'pair_id' in label and label['pair_id'] < len(color_palette.get('label_pairs', [])):
+                        pair = color_palette['label_pairs'][label['pair_id']]
+                        if label.get('direction') == 'horizontal':
+                            label_color = pair['horizontal']['color']
+                        else:
+                            label_color = pair['vertical']['color']
+                    
+                    colored_cells[(label['row'], label['col'])] = {
+                        'color': label_color,
+                        'type': 'label',
+                        'label_type': f"pair_{label.get('pair_id', 0)}_{label.get('direction', 'unknown')}",
+                        'zone_id': zone['id'],
+                        'pair_id': label.get('pair_id', 0),
+                        'direction': label.get('direction', 'unknown')
+                    }
+    
+    # Créer les données du DataFrame
+    data = []
+    columns = [num_to_excel_col(i) for i in range(1, max_col + 1)]
+    
+    for row in range(1, max_row + 1):
+        row_data = []
+        for col in range(1, max_col + 1):
+            cell = ws.cell(row=row, column=col)
+            value = cell.value if cell.value is not None else ""
+            row_data.append(str(value))
+        data.append(row_data)
+    
+    # Créer le DataFrame
+    df = pd.DataFrame(data, columns=columns, index=range(1, max_row + 1))
+    
+    # Si pas de zones ou de mapping de couleurs, retourner le DataFrame simple
+    if not zones or not color_palette:
+        return df
+    
+    # Appliquer le style avec les couleurs
+    def style_cells(val):
+        """Fonction pour styler les cellules"""
+        from utils.excel_utils import excel_col_to_num
+        from utils.color_detector import hex_to_rgb
+        
+        styles = pd.DataFrame('', index=df.index, columns=df.columns)
+        
+        for row_idx, row_num in enumerate(df.index, 1):
+            for col_idx, col_name in enumerate(df.columns):
+                col_num = excel_col_to_num(col_name)
+                
+                if (row_num, col_num) in colored_cells:
+                    cell_info = colored_cells[(row_num, col_num)]
+                    color = cell_info['color']
+                    
+                    # Calculer une couleur de texte contrastante
+                    r, g, b = hex_to_rgb(color)
+                    brightness = (r * 299 + g * 587 + b * 114) / 1000
+                    text_color = 'white' if brightness < 128 else 'black'
+                    
+                    if cell_info['type'] == 'zone':
+                        styles.iloc[row_idx-1, col_idx] = f'background-color: #{color}; color: {text_color}; border: 2px solid #{color};'
+                    elif cell_info['type'] == 'label':
+                        # Style différencié selon la direction
+                        if cell_info.get('direction') == 'horizontal':
+                            styles.iloc[row_idx-1, col_idx] = f'background-color: #{color}; color: {text_color}; border: 3px solid #{color}; font-weight: bold; text-decoration: underline;'
+                        else:
+                            styles.iloc[row_idx-1, col_idx] = f'background-color: #{color}; color: {text_color}; border: 3px double #{color}; font-weight: bold; font-style: italic;'
+        
+        return styles
+    
+    # Appliquer le style
+    try:
+        styled_df = df.style.apply(style_cells, axis=None)
+        styled_df = styled_df.set_table_attributes('style="border-collapse: collapse; font-size: 12px;"')
+        return styled_df
+    except Exception as e:
+        # En cas d'erreur avec le style, retourner le DataFrame simple
+        print(f"Erreur lors de l'application du style: {e}")
+        return df
+
+def create_zone_detail_table_view_pairs(workbook, sheet_name: str, zone: Dict, color_palette: Dict) -> pd.DataFrame:
+    """
+    Crée une vue tableau détaillée pour une zone spécifique avec coloration des paires
+    """
+    ws = workbook[sheet_name]
+    bounds = zone['bounds']
+    
+    # Ajouter une marge pour voir les labels autour
+    margin = 3
+    min_row = max(1, bounds['min_row'] - margin)
+    max_row = min(ws.max_row, bounds['max_row'] + margin)
+    min_col = max(1, bounds['min_col'] - margin)
+    max_col = min(ws.max_column, bounds['max_col'] + margin)
+    
+    # Créer un mapping des cellules de la zone et des labels
+    zone_cells = {(c['row'], c['col']) for c in zone['cells']}
+    label_cells = {(l['row'], l['col']): l for l in zone.get('labels', [])}
+    
+    # Créer les données du DataFrame
+    data = []
+    columns = [num_to_excel_col(i) for i in range(min_col, max_col + 1)]
+    
+    for row in range(min_row, max_row + 1):
+        row_data = []
+        for col in range(min_col, max_col + 1):
+            cell = ws.cell(row=row, column=col)
+            value = cell.value if cell.value is not None else ""
+            row_data.append(str(value))
+        data.append(row_data)
+    
+    # Créer le DataFrame
+    df = pd.DataFrame(data, columns=columns, index=range(min_row, max_row + 1))
+    
+    def style_zone_cells(val):
+        """Fonction pour styler les cellules de la zone avec paires"""
+        from utils.excel_utils import excel_col_to_num, num_to_excel_col
+        from utils.color_detector import hex_to_rgb
+        
+        styles = pd.DataFrame('', index=df.index, columns=df.columns)
+        
+        for row_idx in range(len(df)):
+            actual_row = df.index[row_idx]
+            
+            for col_idx in range(len(df.columns)):
+                col_name = df.columns[col_idx]
+                col_num = excel_col_to_num(col_name)
+                
+                # Vérifier si c'est une cellule de zone
+                if (actual_row, col_num) in zone_cells:
+                    zone_color = color_palette['zone_color']
+                    r, g, b = hex_to_rgb(zone_color)
+                    brightness = (r * 299 + g * 587 + b * 114) / 1000
+                    text_color = 'white' if brightness < 128 else 'black'
+                    
+                    styles.iloc[row_idx, col_idx] = f'background-color: #{zone_color}; color: {text_color}; font-weight: bold; border: 2px solid #{zone_color};'
+                
+                # Vérifier si c'est un label (priorité sur la zone)
+                elif (actual_row, col_num) in label_cells:
+                    label = label_cells[(actual_row, col_num)]
+                    
+                    # Déterminer la couleur du label selon la paire et la direction
+                    label_color = None
+                    if 'pair_id' in label and label['pair_id'] < len(color_palette.get('label_pairs', [])):
+                        pair = color_palette['label_pairs'][label['pair_id']]
+                        if label.get('direction') == 'horizontal':
+                            label_color = pair['horizontal']['color']
+                        else:
+                            label_color = pair['vertical']['color']
+                    
+                    if label_color:
+                        r, g, b = hex_to_rgb(label_color)
+                        brightness = (r * 299 + g * 587 + b * 114) / 1000
+                        text_color = 'white' if brightness < 128 else 'black'
+                        
+                        # Style différencié selon la direction
+                        if label.get('direction') == 'horizontal':
+                            styles.iloc[row_idx, col_idx] = f'background-color: #{label_color}; color: {text_color}; font-weight: bold; border: 3px solid #{label_color}; box-shadow: 0 2px 0 rgba({r},{g},{b},0.7);'
+                        else:
+                            styles.iloc[row_idx, col_idx] = f'background-color: #{label_color}; color: {text_color}; font-weight: bold; border: 3px solid #{label_color}; box-shadow: 2px 0 0 rgba({r},{g},{b},0.7);'
+        
+        return styles
+
+    # Appliquer le style
+    try:
+        styled_df = df.style.apply(style_zone_cells, axis=None)
+        styled_df = styled_df.set_table_attributes('style="border-collapse: collapse; font-size: 14px;"')
+        styled_df = styled_df.set_caption(f"Zone {zone['id']} - Vue détaillée tableau (Paires de labels)")
+        return styled_df
+    except Exception as e:
+        print(f"Erreur lors de l'application du style: {e}")
+        return df
+
+def create_zone_detail_table_view_pairs_enhanced(workbook, sheet_name: str, zone: Dict, 
+                                                color_palette: Dict, show_markers: bool = True) -> pd.DataFrame:
+    """
+    Version améliorée de la vue tableau avec marqueurs visuels pour les paires
+    """
+    ws = workbook[sheet_name]
+    bounds = zone['bounds']
+    
+    # Calculer la zone d'affichage avec marge
+    margin = 3
+    min_row = max(1, bounds['min_row'] - margin)
+    max_row = min(ws.max_row, bounds['max_row'] + margin)
+    min_col = max(1, bounds['min_col'] - margin)
+    max_col = min(ws.max_column, bounds['max_col'] + margin)
+    
+    # Créer les mappings
+    zone_cells = {(c['row'], c['col']) for c in zone['cells']}
+    label_cells = {(l['row'], l['col']): l for l in zone.get('labels', [])}
+    
+    # Créer le DataFrame avec marqueurs visuels
+    columns = [num_to_excel_col(i) for i in range(min_col, max_col + 1)]
+    data = []
+    
+    for row in range(min_row, max_row + 1):
+        row_data = []
+        for col in range(min_col, max_col + 1):
+            cell = ws.cell(row=row, column=col)
+            value = cell.value if cell.value is not None else ""
+            
+            # Ajouter des indicateurs visuels dans le texte si activé
+            if show_markers:
+                if (row, col) in zone_cells:
+                    # Cellule de zone
+                    value = f"🔵 {value}" if value else "🔵"
+                elif (row, col) in label_cells:
+                    # Label - indicateur selon la paire et la direction
+                    label = label_cells[(row, col)]
+                    if 'pair_id' in label:
+                        pair_num = label['pair_id'] + 1
+                        if label.get('direction') == 'horizontal':
+                            marker = f"➡️P{pair_num}"
+                        else:
+                            marker = f"⬇️P{pair_num}"
+                        value = f"{marker} {value}" if value else marker
+            
+            row_data.append(str(value))
+        data.append(row_data)
+    
+    df = pd.DataFrame(data, columns=columns, index=range(min_row, max_row + 1))
+    
+    # Style avancé avec CSS
+    def enhanced_style(x):
+        """Style avancé pour le tableau avec paires"""
+        from utils.excel_utils import excel_col_to_num
+        from utils.color_detector import hex_to_rgb
+        
+        styles = pd.DataFrame('', index=df.index, columns=df.columns)
+        
+        for row_idx in range(len(df)):
+            actual_row = df.index[row_idx]
+            
+            for col_idx in range(len(df.columns)):
+                col_name = df.columns[col_idx]
+                col_num = excel_col_to_num(col_name)
+                
+                if (actual_row, col_num) in zone_cells:
+                    # Style pour cellules de zone
+                    zone_color = color_palette['zone_color']
+                    r, g, b = hex_to_rgb(zone_color)
+                    
+                    styles.iloc[row_idx, col_idx] = f'background-color: rgba({r}, {g}, {b}, 0.3); border: 3px solid #{zone_color}; font-weight: bold; text-align: center;'
+                
+                elif (actual_row, col_num) in label_cells:
+                    # Style pour labels avec différenciation par paire
+                    label = label_cells[(actual_row, col_num)]
+                    
+                    if 'pair_id' in label and label['pair_id'] < len(color_palette.get('label_pairs', [])):
+                        pair = color_palette['label_pairs'][label['pair_id']]
+                        
+                        if label.get('direction') == 'horizontal':
+                            label_color = pair['horizontal']['color']
+                            r, g, b = hex_to_rgb(label_color)
+                            styles.iloc[row_idx, col_idx] = f'background-color: rgba({r}, {g}, {b}, 0.5); border-top: 4px solid #{label_color}; border-bottom: 4px solid #{label_color}; font-weight: bold; text-align: center;'
+                        else:
+                            label_color = pair['vertical']['color']
+                            r, g, b = hex_to_rgb(label_color)
+                            styles.iloc[row_idx, col_idx] = f'background-color: rgba({r}, {g}, {b}, 0.5); border-left: 4px solid #{label_color}; border-right: 4px solid #{label_color}; font-weight: bold; text-align: center;'
+        
+        return styles
+    
+    try:
+        styled_df = df.style.apply(enhanced_style, axis=None)
+        styled_df = styled_df.set_table_attributes('style="border-collapse: collapse; font-size: 12px;"')
+        
+        # Créer la légende
+        legend_parts = ["🔵 = Zone"]
+        for i, pair in enumerate(color_palette.get('label_pairs', [])):
+            legend_parts.append(f"➡️P{i+1} = {pair['horizontal']['name']}")
+            legend_parts.append(f"⬇️P{i+1} = {pair['vertical']['name']}")
+        
+        caption = f"<h3>Zone {zone['id']} - Vue avec marqueurs de paires</h3><p>{' | '.join(legend_parts)}</p>"
+        styled_df = styled_df.set_caption(caption)
+        
+        return styled_df
+    except Exception as e:
+        print(f"Erreur style avancé: {e}")
+        return df
+
+def export_to_json_pairs(zones, sheet_name, color_palette):
+    """Exporte les zones avec le système de 4 couleurs en JSON"""
+    import json
+    from datetime import datetime
+    from utils.excel_utils import num_to_excel_col
+    
+    export_data = {
+        "date_export": datetime.now().isoformat(),
+        "sheet_name": sheet_name,
+        "detection_mode": "two_colors_system",
+        "color_palette": {
+            "zone_color": f"#{color_palette['zone_color']}",
+            "zone_name": color_palette['zone_name'],
+            "headers": {
+                "horizontal": {
+                    "h1": {
+                        "color": f"#{color_palette.get('h1_color', '')}",
+                        "name": color_palette.get('h1_name', 'H1')
+                    },
+                    "h2": {
+                        "color": f"#{color_palette.get('h2_color', '')}",
+                        "name": color_palette.get('h2_name', 'H2')
+                    }
+                },
+                "vertical": {
+                    "v1": {
+                        "color": f"#{color_palette.get('v1_color', '')}",
+                        "name": color_palette.get('v1_name', 'V1')
+                    },
+                    "v2": {
+                        "color": f"#{color_palette.get('v2_color', '')}",
+                        "name": color_palette.get('v2_name', 'V2')
+                    }
+                }
+            }
+        },
+        "zones": []
+    }
+    
+    # Exporter les zones
+    for zone in zones:
+        zone_data = {
+            "id": zone['id'],
+            "bounds": {
+                "min_row": zone['bounds']['min_row'],
+                "max_row": zone['bounds']['max_row'],
+                "min_col": zone['bounds']['min_col'],
+                "max_col": zone['bounds']['max_col'],
+                "min_col_letter": num_to_excel_col(zone['bounds']['min_col']),
+                "max_col_letter": num_to_excel_col(zone['bounds']['max_col'])
+            },
+            "cell_count": zone['cell_count'],
+            "cells": format_cells_for_export_pairs(zone['cells']),
+            "labels": {
+                "horizontal": [],
+                "vertical": []
+            }
+        }
+        
+        # Organiser les labels par direction
+        for label in zone.get('labels', []):
+            formatted_label = {
+                "address": f"{num_to_excel_col(label['col'])}{label['row']}",
+                "row": label['row'],
+                "col": label['col'],
+                "col_letter": num_to_excel_col(label['col']),
+                "value": str(label.get('value', '')) if label.get('value') is not None else "",
+                "type": label.get('type', ''),
+                "distance": label.get('distance', 0),
+                "color": f"#{label.get('color', '')}"
+            }
+            
+            if label.get('direction') == 'horizontal':
+                zone_data["labels"]["horizontal"].append(formatted_label)
+            else:
+                zone_data["labels"]["vertical"].append(formatted_label)
+        
+        export_data["zones"].append(zone_data)
+    
+    return json.dumps(export_data, indent=2, ensure_ascii=False)
+
+def format_cells_for_export_pairs(cells):
+    """Formate les cellules pour l'export"""
+    from utils.excel_utils import num_to_excel_col
+    formatted_cells = []
+    
+    for cell in cells:
+        formatted_cells.append({
+            "address": f"{num_to_excel_col(cell['col'])}{cell['row']}",
+            "row": cell['row'],
+            "col": cell['col'],
+            "col_letter": num_to_excel_col(cell['col']),
+            "value": str(cell.get('value', '')) if cell.get('value') is not None else ""
+        })
+    
+    return formatted_cells
+
+def format_labels_by_pair(labels):
+    """Organise les labels par paire pour l'export"""
+    from utils.excel_utils import num_to_excel_col
+    from collections import defaultdict
+    
+    labels_by_pair = defaultdict(lambda: {"horizontal": [], "vertical": []})
+    
+    for label in labels:
+        if 'pair_id' in label:
+            formatted_label = {
+                "address": f"{num_to_excel_col(label['col'])}{label['row']}",
+                "row": label['row'],
+                "col": label['col'],
+                "col_letter": num_to_excel_col(label['col']),
+                "value": str(label.get('value', '')) if label.get('value') is not None else "",
+                "distance": label.get('distance', 0),
+                "position": label.get('position', ''),
+                "pair_name": label.get('pair_name', '')
+            }
+            
+            labels_by_pair[label['pair_id']][label['direction']].append(formatted_label)
+    
+    # Convertir en format liste pour JSON
+    result = []
+    for pair_id in sorted(labels_by_pair.keys()):
+        result.append({
+            "pair_id": pair_id,
+            "horizontal_labels": labels_by_pair[pair_id]["horizontal"],
+            "vertical_labels": labels_by_pair[pair_id]["vertical"]
+        })
+    
+    return result
 
 if __name__ == "__main__":
     main()
