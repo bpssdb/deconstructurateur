@@ -18,14 +18,13 @@ from utils.visualization import create_excel_visualization, create_color_preview
 from utils.export import export_to_json
 import plotly.express as px
 
-# Configuration de la page Streamlit
 st.set_page_config(
-    page_title="📊 Déconstructurateur Excel - Paires Alternées",
+    page_title="📊 Déconstructurateur Excel - 4 Couleurs",
     page_icon="📊",
     layout="wide"
 )
 
-# CSS personnalisé
+# CSS personnalisé mis à jour
 st.markdown("""
 <style>
     .stDataFrame {
@@ -40,18 +39,16 @@ st.markdown("""
         margin-right: 10px;
         vertical-align: middle;
     }
-    div[data-testid="stHorizontalBlock"] {
-        align-items: stretch;
-    }
-    .pair-container {
+    .color-section {
         background-color: #f0f0f0;
         padding: 15px;
         border-radius: 10px;
         margin-bottom: 15px;
     }
-    .pair-header {
+    .section-header {
         font-weight: bold;
         margin-bottom: 10px;
+        font-size: 1.1em;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -83,9 +80,9 @@ def main():
     """Fonction principale de l'application"""
     init_session_state()
     
-    st.title("📊 Déconstructurateur Excel - Paires de Labels Alternées")
-    st.markdown("Détection automatique des zones avec système de paires de labels pour une extraction intelligente")
-    
+    st.title("📊 Déconstructurateur Excel - Système 4 Couleurs")
+    st.markdown("Détection automatique des zones avec 2 couleurs de headers horizontaux et 2 couleurs de headers verticaux")
+     
     # Upload du fichier
     uploaded_file = st.file_uploader(
         "📂 Charger un fichier Excel (.xlsx, .xls)", 
@@ -297,7 +294,7 @@ def display_detected_colors():
             st.info(f"💡 Total : {total_colored_cells:,} cellules colorées détectées dans l'ensemble du fichier")
 
 def configure_color_palette_pairs_global():
-    """Configure la palette de couleurs globale pour tout le fichier Excel"""
+    """Configure la palette de couleurs globale avec 4 couleurs indépendantes"""
     st.markdown("### 🎯 Configuration globale de la palette")
     st.info("Cette palette sera utilisée pour toutes les feuilles du fichier Excel")
     
@@ -310,86 +307,131 @@ def configure_color_palette_pairs_global():
     # Configuration de la couleur des zones
     st.markdown("#### 📦 1. Couleur des zones de données")
     zone_color = st.selectbox(
-        "Cellules à labelliser (données à compléter par le LLM)",
+        "Cellules à labelliser (données à extraire)",
         options=list(color_options.keys()),
         help="Cette couleur sera recherchée dans toutes les feuilles"
     )
     
-    # Configuration des paires de labels
-    st.markdown("#### 🏷️ 2. Paires de labels (en-têtes alternés)")
+    # Configuration des headers horizontaux
+    st.markdown("""
+    <div class="color-section">
+        <div class="section-header">➡️ 2. Headers Horizontaux (en-têtes de colonnes)</div>
+    </div>
+    """, unsafe_allow_html=True)
     
-    # Nombre de paires
-    num_pairs = st.number_input("Nombre de paires de labels", min_value=1, max_value=5, value=2)
+    col1, col2 = st.columns(2)
     
-    # Configuration de chaque paire
-    pairs = []
     used_colors = [color_options[zone_color]]
     
-    for i in range(num_pairs):
-        st.markdown(f"""
-        <div class="pair-container">
-            <div class="pair-header">🔗 Paire {i+1}</div>
-        </div>
-        """, unsafe_allow_html=True)
+    with col1:
+        available_h1 = [opt for opt in color_options.keys() if color_options[opt] not in used_colors]
+        h1_color = st.selectbox(
+            "Couleur H1 (première couleur horizontale)",
+            options=available_h1,
+            key="global_h1_color",
+            help="Première couleur pour les headers horizontaux"
+        )
+        if h1_color:
+            used_colors.append(color_options[h1_color])
+    
+    with col2:
+        available_h2 = [opt for opt in color_options.keys() if color_options[opt] not in used_colors]
+        h2_color = st.selectbox(
+            "Couleur H2 (deuxième couleur horizontale)",
+            options=available_h2,
+            key="global_h2_color",
+            help="Deuxième couleur pour les headers horizontaux"
+        )
+        if h2_color:
+            used_colors.append(color_options[h2_color])
+    
+    # Configuration des headers verticaux
+    st.markdown("""
+    <div class="color-section">
+        <div class="section-header">⬇️ 3. Headers Verticaux (en-têtes de lignes)</div>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    col3, col4 = st.columns(2)
+    
+    with col3:
+        available_v1 = [opt for opt in color_options.keys() if color_options[opt] not in used_colors]
+        v1_color = st.selectbox(
+            "Couleur V1 (première couleur verticale)",
+            options=available_v1,
+            key="global_v1_color",
+            help="Première couleur pour les headers verticaux"
+        )
+        if v1_color:
+            used_colors.append(color_options[v1_color])
+    
+    with col4:
+        available_v2 = [opt for opt in color_options.keys() if color_options[opt] not in used_colors]
+        v2_color = st.selectbox(
+            "Couleur V2 (deuxième couleur verticale)",
+            options=available_v2,
+            key="global_v2_color",
+            help="Deuxième couleur pour les headers verticaux"
+        )
+        if v2_color:
+            used_colors.append(color_options[v2_color])
+    
+    # Explication du système
+    with st.expander("💡 Comment fonctionne le système à 4 couleurs ?"):
+        st.markdown("""
+        **Principe du système à 4 couleurs :**
         
-        col1, col2 = st.columns(2)
+        1. **Zone de données** : Cellules contenant les données à extraire (1 couleur)
         
-        with col1:
-            available_h = [opt for opt in color_options.keys() if color_options[opt] not in used_colors]
-            
-            h_color = st.selectbox(
-                f"Couleur horizontale (colonnes)",
-                options=available_h,
-                key=f"global_h_color_{i}",
-                help=f"Labels horizontaux pour la paire {i+1}"
-            )
-            if h_color:
-                used_colors.append(color_options[h_color])
+        2. **Headers horizontaux** : 2 couleurs (H1 et H2)
+           - En remontant dans une colonne depuis une zone, on collecte tous les headers de la PREMIÈRE couleur trouvée
+           - On s'arrête quand on rencontre l'AUTRE couleur horizontale
         
-        with col2:
-            available_v = [opt for opt in color_options.keys() if color_options[opt] not in used_colors]
-            
-            v_color = st.selectbox(
-                f"Couleur verticale (lignes)",
-                options=available_v,
-                key=f"global_v_color_{i}",
-                help=f"Labels verticaux pour la paire {i+1}"
-            )
-            if v_color:
-                used_colors.append(color_options[v_color])
+        3. **Headers verticaux** : 2 couleurs (V1 et V2)
+           - En reculant dans une ligne depuis une zone, on collecte tous les headers de la PREMIÈRE couleur trouvée
+           - On s'arrête quand on rencontre l'AUTRE couleur verticale
         
-        if h_color and v_color:
-            pairs.append({
-                'horizontal': {
-                    'color': color_options[h_color],
-                    'name': f"Headers H{i+1} ({h_color.split(' (')[0]})"
-                },
-                'vertical': {
-                    'color': color_options[v_color],
-                    'name': f"Headers V{i+1} ({v_color.split(' (')[0]})"
-                }
-            })
+        **Exemple :**
+        ```
+        [H1] [H1] [H2] [H1]
+        [V1] [Z]  [Z]  [Z]
+        [V2] [Z]  [Z]  [Z]
+        ```
+        
+        - Cellule Z en B2 : prendra H1 (première couleur H trouvée) et V1 (première couleur V trouvée)
+        - Cellule Z en C3 : prendra H2 (première couleur H trouvée) et V2 (première couleur V trouvée)
+        """)
     
     # Bouton de validation
     if st.button("✅ Valider la palette globale", type="primary"):
-        if len(pairs) == num_pairs and all(p['horizontal']['color'] != p['vertical']['color'] for p in pairs):
-            all_colors = [color_options[zone_color]]
-            for p in pairs:
-                all_colors.extend([p['horizontal']['color'], p['vertical']['color']])
+        if h1_color and h2_color and v1_color and v2_color:
+            all_colors = [
+                color_options[zone_color],
+                color_options[h1_color],
+                color_options[h2_color],
+                color_options[v1_color],
+                color_options[v2_color]
+            ]
             
             if len(all_colors) == len(set(all_colors)):
                 st.session_state.color_palette = {
                     'zone_color': color_options[zone_color],
                     'zone_name': zone_color.split(' (')[0],
-                    'label_pairs': pairs
+                    'h1_color': color_options[h1_color],
+                    'h1_name': h1_color.split(' (')[0],
+                    'h2_color': color_options[h2_color],
+                    'h2_name': h2_color.split(' (')[0],
+                    'v1_color': color_options[v1_color],
+                    'v1_name': v1_color.split(' (')[0],
+                    'v2_color': color_options[v2_color],
+                    'v2_name': v2_color.split(' (')[0]
                 }
-                st.session_state.label_pairs = pairs
                 st.success("✅ Palette globale configurée! Vous pouvez maintenant traiter les feuilles.")
+                st.rerun()
             else:
                 st.error("❌ Toutes les couleurs doivent être différentes !")
         else:
-            st.error("❌ Veuillez configurer toutes les paires avec des couleurs différentes !")
-
+            st.error("❌ Veuillez sélectionner toutes les couleurs !")
 def process_single_sheet(sheet_name):
     """Traite une seule feuille avec la palette globale - Version corrigée"""
     with st.spinner(f"Traitement de la feuille '{sheet_name}'..."):
@@ -768,7 +810,7 @@ def export_all_sheets_json():
     
     return json.dumps(export_data, indent=2, ensure_ascii=False)
 
-    
+
     """Configure la palette de couleurs avec système de paires"""
     st.header("🎯 Étape 2: Configuration de la palette avec paires alternées")
     
@@ -917,7 +959,7 @@ def validate_and_detect_zones_pairs(selected_sheet, zone_color, zone_name, pairs
         st.success(f"✅ {len(zones)} zones détectées avec leurs labels alternés!")
 
 def display_selected_palette_pairs():
-    """Affiche la palette de couleurs sélectionnée"""
+    """Affiche la palette sélectionnée - Version 4 couleurs"""
     st.subheader("Palette configurée:")
     
     # Zone de données
@@ -972,6 +1014,7 @@ def display_selected_palette_pairs():
             </div>
             """, unsafe_allow_html=True)
 
+
 def display_results(selected_sheet):
     """Affiche les résultats de la détection avec visualisation adaptée aux paires"""
     st.header("📊 Visualisation et édition")
@@ -1021,7 +1064,7 @@ def display_results(selected_sheet):
         display_statistics_tab_pairs()
 
 def display_overview_tab_pairs(selected_sheet):
-    """Affiche l'onglet vue d'ensemble adapté aux paires"""
+    """Affiche l'onglet vue d'ensemble - Version 4 couleurs"""
     # Sous-tabs pour différentes vues
     view_tab1, view_tab2 = st.tabs(["🗺️ Vue schématique", "📋 Vue tableau"])
     
@@ -1029,17 +1072,25 @@ def display_overview_tab_pairs(selected_sheet):
         col1, col2 = st.columns([3, 1])
         
         with col1:
-            # Vue Plotly avec adaptation pour les paires
-            fig = create_excel_visualization_pairs(
+            # Vue Plotly adaptée pour 4 couleurs
+            adapted_palette = st.session_state.color_palette.copy()
+            adapted_palette['label_colors'] = {
+                'h1': {'color': st.session_state.color_palette['h1_color'], 'name': st.session_state.color_palette['h1_name']},
+                'h2': {'color': st.session_state.color_palette['h2_color'], 'name': st.session_state.color_palette['h2_name']},
+                'v1': {'color': st.session_state.color_palette['v1_color'], 'name': st.session_state.color_palette['v1_name']},
+                'v2': {'color': st.session_state.color_palette['v2_color'], 'name': st.session_state.color_palette['v2_name']}
+            }
+            
+            fig = create_excel_visualization(
                 st.session_state.workbook,
                 selected_sheet,
                 st.session_state.zones,
                 st.session_state.selected_zone,
-                st.session_state.color_palette
+                adapted_palette
             )
             st.plotly_chart(fig, use_container_width=True)
             
-            # Légende adaptée aux paires
+            # Légende pour 4 couleurs
             st.markdown("### 🎯 Légende")
             
             # Zone
@@ -1050,38 +1101,46 @@ def display_overview_tab_pairs(selected_sheet):
             </div>
             """, unsafe_allow_html=True)
             
-            # Paires
-            if 'label_pairs' in st.session_state.color_palette:
-                for i, pair in enumerate(st.session_state.color_palette['label_pairs']):
-                    st.markdown(f"""
-                    <div style="margin-left: 20px; margin-top: 5px;">
-                        <strong>Paire {i+1}:</strong>
-                        <div style="display: flex; gap: 20px; margin-left: 20px;">
-                            <div style="display: flex; align-items: center;">
-                                <div style="width: 15px; height: 15px; background-color: #{pair['horizontal']['color']}; border: 1px solid black; margin-right: 5px;"></div>
-                                <span style="font-size: 0.9em;">{pair['horizontal']['name']}</span>
-                            </div>
-                            <div style="display: flex; align-items: center;">
-                                <div style="width: 15px; height: 15px; background-color: #{pair['vertical']['color']}; border: 1px solid black; margin-right: 5px;"></div>
-                                <span style="font-size: 0.9em;">{pair['vertical']['name']}</span>
-                            </div>
-                        </div>
-                    </div>
-                    """, unsafe_allow_html=True)
+            # Headers
+            col_leg1, col_leg2 = st.columns(2)
+            
+            with col_leg1:
+                st.markdown("**Headers Horizontaux:**")
+                st.markdown(f"""
+                <div style="display: flex; align-items: center; margin: 5px 0;">
+                    <div style="width: 15px; height: 15px; background-color: #{st.session_state.color_palette['h1_color']}; border: 1px solid black; margin-right: 5px;"></div>
+                    <span style="font-size: 0.9em;">H1: {st.session_state.color_palette['h1_name']}</span>
+                </div>
+                <div style="display: flex; align-items: center; margin: 5px 0;">
+                    <div style="width: 15px; height: 15px; background-color: #{st.session_state.color_palette['h2_color']}; border: 1px solid black; margin-right: 5px;"></div>
+                    <span style="font-size: 0.9em;">H2: {st.session_state.color_palette['h2_name']}</span>
+                </div>
+                """, unsafe_allow_html=True)
+            
+            with col_leg2:
+                st.markdown("**Headers Verticaux:**")
+                st.markdown(f"""
+                <div style="display: flex; align-items: center; margin: 5px 0;">
+                    <div style="width: 15px; height: 15px; background-color: #{st.session_state.color_palette['v1_color']}; border: 1px solid black; margin-right: 5px;"></div>
+                    <span style="font-size: 0.9em;">V1: {st.session_state.color_palette['v1_name']}</span>
+                </div>
+                <div style="display: flex; align-items: center; margin: 5px 0;">
+                    <div style="width: 15px; height: 15px; background-color: #{st.session_state.color_palette['v2_color']}; border: 1px solid black; margin-right: 5px;"></div>
+                    <span style="font-size: 0.9em;">V2: {st.session_state.color_palette['v2_name']}</span>
+                </div>
+                """, unsafe_allow_html=True)
         
         with col2:
             st.markdown("### 🎮 Contrôles rapides")
             
             # Liste des zones avec statistiques de labels
             for zone in st.session_state.zones:
-                # Compter les labels par paire
-                label_stats = defaultdict(lambda: {'h': 0, 'v': 0})
+                # Compter les labels par type
+                label_counts = {'h1': 0, 'h2': 0, 'v1': 0, 'v2': 0}
                 for label in zone.get('labels', []):
-                    if 'pair_id' in label:
-                        if label['direction'] == 'horizontal':
-                            label_stats[label['pair_id']]['h'] += 1
-                        else:
-                            label_stats[label['pair_id']]['v'] += 1
+                    label_type = label.get('type', '')
+                    if label_type in label_counts:
+                        label_counts[label_type] += 1
                 
                 # Afficher la zone
                 with st.container():
@@ -1092,11 +1151,8 @@ def display_overview_tab_pairs(selected_sheet):
                         st.rerun()
                     
                     # Afficher les stats de labels
-                    if label_stats:
-                        stats_text = []
-                        for pair_id, stats in sorted(label_stats.items()):
-                            stats_text.append(f"P{pair_id+1}: {stats['h']}H/{stats['v']}V")
-                        st.caption(" | ".join(stats_text))
+                    stats_text = f"H1:{label_counts['h1']} H2:{label_counts['h2']} V1:{label_counts['v1']} V2:{label_counts['v2']}"
+                    st.caption(stats_text)
     
     with view_tab2:
         st.markdown("### 📊 Vue tableau avec contenu des cellules")
@@ -1108,26 +1164,31 @@ def display_overview_tab_pairs(selected_sheet):
         with col2:
             max_rows = st.number_input("Nombre de lignes max", min_value=10, max_value=200, value=50)
         
-        # Créer la vue tableau avec adaptation pour les paires
+        # Créer la vue tableau
         try:
-            df_styled = create_dataframe_view_pairs(
+            adapted_palette = st.session_state.color_palette.copy()
+            adapted_palette['label_colors'] = {
+                'h1': {'color': st.session_state.color_palette['h1_color']},
+                'h2': {'color': st.session_state.color_palette['h2_color']},
+                'v1': {'color': st.session_state.color_palette['v1_color']},
+                'v2': {'color': st.session_state.color_palette['v2_color']}
+            }
+            
+            df_styled = create_dataframe_view(
                 st.session_state.workbook,
                 selected_sheet,
                 st.session_state.zones if show_colors else None,
-                st.session_state.color_palette if show_colors else None,
+                adapted_palette if show_colors else None,
                 max_rows=max_rows
             )
             
             if show_colors and hasattr(df_styled, 'to_html'):
-                # Afficher avec style
                 st.markdown(df_styled.to_html(), unsafe_allow_html=True)
             else:
-                # Afficher sans style
                 st.dataframe(df_styled, use_container_width=True, height=600)
                 
         except Exception as e:
             st.error(f"Erreur lors de la création de la vue tableau: {str(e)}")
-            st.info("Essayez de réduire le nombre de lignes à afficher.")
 
 def display_detailed_tab_pairs(selected_sheet):
     """Affiche l'onglet vue détaillée pour les paires"""
@@ -1326,7 +1387,7 @@ def display_detailed_tab_pairs(selected_sheet):
             st.write("(cellules vides)")
 
 def display_statistics_tab_pairs():
-    """Affiche les statistiques adaptées aux paires"""
+    """Affiche les statistiques - Version 4 couleurs"""
     if not st.session_state.zones:
         st.info("Aucune zone détectée pour afficher les statistiques")
         return
@@ -1337,80 +1398,86 @@ def display_statistics_tab_pairs():
     total_zones = len(st.session_state.zones)
     total_cells = sum(z['cell_count'] for z in st.session_state.zones)
     total_labels = sum(len(z.get('labels', [])) for z in st.session_state.zones)
-    num_pairs = len(st.session_state.color_palette.get('label_pairs', []))
     
     col1.metric("📦 Zones", total_zones)
     col2.metric("📋 Cellules totales", total_cells)
     col3.metric("🏷️ Labels totaux", total_labels)
-    col4.metric("🔗 Paires configurées", num_pairs)
+    col4.metric("🎨 Couleurs configurées", "5")
     
-    # Graphiques
-    st.markdown("### 📊 Analyse par paire")
+    # Graphiques par type de label
+    st.markdown("### 📊 Répartition des labels par type")
     
-    # Compter les labels par paire et direction
-    pair_stats = defaultdict(lambda: {'horizontal': 0, 'vertical': 0})
+    # Compter les labels par type
+    label_counts = {'h1': 0, 'h2': 0, 'v1': 0, 'v2': 0}
     
     for zone in st.session_state.zones:
         for label in zone.get('labels', []):
-            if 'pair_id' in label:
-                pair_stats[label['pair_id']][label['direction']] += 1
+            label_type = label.get('type', '')
+            if label_type in label_counts:
+                label_counts[label_type] += 1
     
     # Créer le graphique
-    if pair_stats:
-        data = []
-        for pair_id in sorted(pair_stats.keys()):
-            stats = pair_stats[pair_id]
-            pair_name = f"Paire {pair_id + 1}"
-            
-            data.append({
-                'Paire': pair_name,
-                'Type': 'Horizontal',
-                'Nombre': stats['horizontal']
-            })
-            data.append({
-                'Paire': pair_name,
-                'Type': 'Vertical',
-                'Nombre': stats['vertical']
-            })
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        # Graphique pour les headers horizontaux
+        h_data = pd.DataFrame({
+            'Type': ['H1', 'H2'],
+            'Nombre': [label_counts['h1'], label_counts['h2']],
+            'Couleur': [st.session_state.color_palette['h1_name'], st.session_state.color_palette['h2_name']]
+        })
         
-        df_pairs = pd.DataFrame(data)
+        fig_h = px.bar(h_data, x='Type', y='Nombre', 
+                      title="Headers Horizontaux",
+                      color='Type',
+                      color_discrete_map={
+                          'H1': f"#{st.session_state.color_palette['h1_color']}",
+                          'H2': f"#{st.session_state.color_palette['h2_color']}"
+                      })
+        st.plotly_chart(fig_h, use_container_width=True)
+    
+    with col2:
+        # Graphique pour les headers verticaux
+        v_data = pd.DataFrame({
+            'Type': ['V1', 'V2'],
+            'Nombre': [label_counts['v1'], label_counts['v2']],
+            'Couleur': [st.session_state.color_palette['v1_name'], st.session_state.color_palette['v2_name']]
+        })
         
-        fig = px.bar(df_pairs, x='Paire', y='Nombre', color='Type',
-                     title="Distribution des labels par paire et direction",
-                     barmode='group')
-        st.plotly_chart(fig, use_container_width=True)
+        fig_v = px.bar(v_data, x='Type', y='Nombre',
+                      title="Headers Verticaux",
+                      color='Type',
+                      color_discrete_map={
+                          'V1': f"#{st.session_state.color_palette['v1_color']}",
+                          'V2': f"#{st.session_state.color_palette['v2_color']}"
+                      })
+        st.plotly_chart(fig_v, use_container_width=True)
     
     # Tableau récapitulatif des zones
     st.markdown("### 📋 Détail par zone")
     
     zone_data = []
     for zone in st.session_state.zones:
-        # Compter les labels par paire pour cette zone
-        zone_pair_stats = defaultdict(lambda: {'h': 0, 'v': 0})
+        # Compter les labels par type pour cette zone
+        zone_label_counts = {'h1': 0, 'h2': 0, 'v1': 0, 'v2': 0}
         for label in zone.get('labels', []):
-            if 'pair_id' in label:
-                if label['direction'] == 'horizontal':
-                    zone_pair_stats[label['pair_id']]['h'] += 1
-                else:
-                    zone_pair_stats[label['pair_id']]['v'] += 1
+            label_type = label.get('type', '')
+            if label_type in zone_label_counts:
+                zone_label_counts[label_type] += 1
         
-        # Créer un résumé textuel
-        pair_summary = []
-        for pair_id in sorted(zone_pair_stats.keys()):
-            stats = zone_pair_stats[pair_id]
-            pair_summary.append(f"P{pair_id+1}: {stats['h']}H/{stats['v']}V")
-        
-        from utils.excel_utils import num_to_excel_col
         zone_data.append({
             'Zone': zone['id'],
             'Cellules': zone['cell_count'],
             'Position': f"{num_to_excel_col(zone['bounds']['min_col'])}{zone['bounds']['min_row']} - {num_to_excel_col(zone['bounds']['max_col'])}{zone['bounds']['max_row']}",
-            'Labels totaux': len(zone.get('labels', [])),
-            'Répartition': " | ".join(pair_summary) if pair_summary else "Aucun label"
+            'H1': zone_label_counts['h1'],
+            'H2': zone_label_counts['h2'],
+            'V1': zone_label_counts['v1'],
+            'V2': zone_label_counts['v2'],
+            'Total Labels': sum(zone_label_counts.values())
         })
     
     st.dataframe(pd.DataFrame(zone_data), use_container_width=True)
-
+    
 def load_workbook_with_values(file):
     """
     Charge un fichier Excel avec les valeurs calculées (pas les formules)
@@ -1485,96 +1552,48 @@ def convert_xls_to_openpyxl_values(file):
     return wb
 
 def display_instructions():
-    """Affiche les instructions d'utilisation pour le système de paires"""
-    with st.expander("ℹ️ Guide d'utilisation - Système de paires alternées"):
+    """Affiche les instructions d'utilisation pour le système 4 couleurs"""
+    with st.expander("ℹ️ Guide d'utilisation - Système 4 couleurs"):
         st.markdown("""
-        ## 🚀 Comment utiliser l'application avec les paires alternées
+        ## 🚀 Comment utiliser l'application
         
-        ### 📋 Concept des paires alternées
+        ### 📋 Concept du système à 4 couleurs
         
-        Cette version avancée permet de gérer des structures Excel complexes avec plusieurs niveaux de headers qui s'alternent.
+        Cette application détecte automatiquement les zones de données et leurs labels associés en utilisant 5 couleurs :
+        - 1 couleur pour les zones de données
+        - 2 couleurs pour les headers horizontaux (H1, H2)
+        - 2 couleurs pour les headers verticaux (V1, V2)
         
         ### 1. Structure attendue
         
         ```
-        [H1] [H1] [H1] [H2] [H2]  <- Headers horizontaux alternés
-        [V1] [Z]  [Z]  [V2] [Z]   <- V1/V2: Headers verticaux, Z: Zones
-        [V1] [Z]  [Z]  [V2] [Z]
+        [H1] [H1] [H2] [H2] [H1]  <- Headers horizontaux
+        [V1] [Z]  [Z]  [Z]  [Z]   <- V1/V2: Headers verticaux, Z: Zones
+        [V2] [Z]  [Z]  [Z]  [Z]
+        [V1] [Z]  [Z]  [Z]  [Z]
         ```
         
         ### 2. Logique de détection
         
-        - **Remontée verticale** : Pour chaque cellule de zone, on remonte dans la colonne pour collecter TOUS les headers horizontaux jusqu'à rencontrer un header vertical de la MÊME paire
-        - **Recul horizontal** : On recule dans la ligne pour collecter TOUS les headers verticaux jusqu'à rencontrer un header horizontal de la MÊME paire
+        Pour chaque cellule de zone :
+        - **Verticalement** : Remonte jusqu'au premier header H trouvé, collecte tous les headers de CETTE couleur, s'arrête à l'autre couleur H
+        - **Horizontalement** : Recule jusqu'au premier header V trouvé, collecte tous les headers de CETTE couleur, s'arrête à l'autre couleur V
         
-        ### 3. Avantages
+        ### 3. Étapes d'utilisation
         
-        - ✅ Gère les structures multi-niveaux
-        - ✅ Supporte l'alternance de différents types de headers
-        - ✅ Permet une extraction plus précise et contextuelle
-        - ✅ Adapté aux tableaux Excel complexes avec sous-catégories
+        1. **Charger** votre fichier Excel
+        2. **Analyser** les couleurs présentes dans tout le fichier
+        3. **Configurer** les 5 couleurs (zone + 2H + 2V)
+        4. **Traiter** les feuilles (individuellement ou toutes)
+        5. **Exporter** les résultats en JSON
         
-        ### 4. Configuration
+        ### 4. Export
         
-        1. **Analyser les couleurs** du fichier Excel (toutes les feuilles)
-        2. **Définir la couleur des zones** de données
-        3. **Configurer les paires** :
-           - Chaque paire = 1 couleur horizontale + 1 couleur verticale
-           - Les paires peuvent s'alterner dans le document
-        4. **Traiter** les feuilles individuellement ou toutes à la fois
-        
-        ### 5. Export
-        
-        Le JSON exporté contiendra :
-        - Un tag par cellule de zone
-        - Tous les labels associés à chaque cellule
-        - La structure complète pour reconstruction par le LLM
-        - Format optimisé pour l'extraction de données
-        """)
-    """Affiche les instructions d'utilisation pour le système de paires"""
-    with st.expander("ℹ️ Guide d'utilisation - Système de paires alternées"):
-        st.markdown("""
-        ## 🚀 Comment utiliser l'application avec les paires alternées
-        
-        ### 📋 Concept des paires alternées
-        
-        Cette version avancée permet de gérer des structures Excel complexes avec plusieurs niveaux de headers qui s'alternent.
-        
-        ### 1. Structure attendue
-        
-        ```
-        [H1] [H1] [H1] [H2] [H2]  <- Headers horizontaux alternés
-        [V1] [Z]  [Z]  [V2] [Z]   <- V1/V2: Headers verticaux, Z: Zones
-        [V1] [Z]  [Z]  [V2] [Z]
-        ```
-        
-        ### 2. Logique de détection
-        
-        - **Remontée verticale** : Pour chaque cellule de zone, on remonte dans la colonne pour collecter TOUS les headers horizontaux jusqu'à rencontrer un header vertical de la MÊME paire
-        - **Recul horizontal** : On recule dans la ligne pour collecter TOUS les headers verticaux jusqu'à rencontrer un header horizontal de la MÊME paire
-        
-        ### 3. Avantages
-        
-        - ✅ Gère les structures multi-niveaux
-        - ✅ Supporte l'alternance de différents types de headers
-        - ✅ Permet une extraction plus précise et contextuelle
-        - ✅ Adapté aux tableaux Excel complexes avec sous-catégories
-        
-        ### 4. Configuration
-        
-        1. **Analyser les couleurs** du fichier Excel
-        2. **Définir la couleur des zones** de données
-        3. **Configurer les paires** :
-           - Chaque paire = 1 couleur horizontale + 1 couleur verticale
-           - Les paires peuvent s'alterner dans le document
-        4. **Valider** pour lancer la détection
-        
-        ### 5. Export
-        
-        Le JSON exporté contiendra :
-        - Les zones détectées
-        - Pour chaque zone, tous ses labels organisés par paire
-        - La structure complète pour reconstruction par le LLM
+        Le JSON exporté contiendra pour chaque cellule de zone :
+        - Sa valeur et sa position
+        - Tous les headers H de la couleur collectée
+        - Tous les headers V de la couleur collectée
+        - Structure optimisée pour l'extraction par LLM
         """)
 
 # Fonctions auxiliaires pour l'affichage adapté aux paires

@@ -1,6 +1,6 @@
 """
 Module de détection et de groupement des zones dans les fichiers Excel
-Support des 4 couleurs de headers (2 horizontaux, 2 verticaux)
+Support des 4 couleurs de headers indépendantes (2 horizontaux, 2 verticaux)
 """
 
 from typing import List, Dict, Set, Tuple, Optional
@@ -19,47 +19,20 @@ def detect_zones_with_two_colors(workbook, sheet_name: str, color_palette: Dict,
         'v2_color': 'RRGGBB',
         ... (et les noms correspondants)
     }
-    OU
-    {
-        'zone_color': 'RRGGBB',
-        'label_pairs': [
-            {
-                'horizontal': {'color': 'RRGGBB', 'name': 'H1'},
-                'vertical': {'color': 'RRGGBB', 'name': 'V1'}
-            },
-            {
-                'horizontal': {'color': 'RRGGBB', 'name': 'H2'},
-                'vertical': {'color': 'RRGGBB', 'name': 'V2'}
-            }
-        ]
-    }
     """
     # Récupérer les cellules de zones
     zone_cells = color_cells.get(color_palette['zone_color'], [])
     
-    # Gérer les deux formats de palette
-    if 'label_pairs' in color_palette:
-        # Nouveau format avec paires
-        h1_color = color_palette['label_pairs'][0]['horizontal']['color']
-        h2_color = color_palette['label_pairs'][1]['horizontal']['color'] if len(color_palette['label_pairs']) > 1 else None
-        v1_color = color_palette['label_pairs'][0]['vertical']['color']
-        v2_color = color_palette['label_pairs'][1]['vertical']['color'] if len(color_palette['label_pairs']) > 1 else None
-        
-        h1_cells = color_cells.get(h1_color, [])
-        h2_cells = color_cells.get(h2_color, []) if h2_color else []
-        v1_cells = color_cells.get(v1_color, [])
-        v2_cells = color_cells.get(v2_color, []) if v2_color else []
-    else:
-        # Ancien format direct
-        h1_color = color_palette.get('h1_color')
-        h2_color = color_palette.get('h2_color')
-        v1_color = color_palette.get('v1_color')
-        v2_color = color_palette.get('v2_color')
-        
-        h1_cells = color_cells.get(h1_color, []) if h1_color else []
-        h2_cells = color_cells.get(h2_color, []) if h2_color else []
-        v1_cells = color_cells.get(v1_color, []) if v1_color else []
-        v2_cells = color_cells.get(v2_color, []) if v2_color else []
+    # Récupérer les cellules de headers
+    h1_color = color_palette.get('h1_color')
+    h2_color = color_palette.get('h2_color')
+    v1_color = color_palette.get('v1_color')
+    v2_color = color_palette.get('v2_color')
+    
+    h1_cells = color_cells.get(h1_color, []) if h1_color else []
+    h2_cells = color_cells.get(h2_color, []) if h2_color else []
+    v1_cells = color_cells.get(v1_color, []) if v1_color else []
+    v2_cells = color_cells.get(v2_color, []) if v2_color else []
     
     print(f"DEBUG detect_zones_with_two_colors:")
     print(f"  - Zone cells: {len(zone_cells)}")
@@ -346,54 +319,26 @@ def are_zones_adjacent(bounds1: Dict, bounds2: Dict, max_gap: int = 1) -> bool:
     
     return False
 
-# Garder les fonctions de compatibilité
+# Garder les fonctions de compatibilité pour ne pas casser le code existant
 def detect_zones_with_alternating_pairs(workbook, sheet_name: str, color_palette: Dict, color_cells: Dict) -> Tuple[List[Dict], Dict]:
-    """Alias pour la compatibilité"""
-    return detect_zones_with_two_colors(workbook, sheet_name, color_palette, color_cells)
-
-def detect_zones_with_palette(workbook, sheet_name: str, color_palette: Dict, color_cells: Dict) -> Tuple[List[Dict], Dict]:
-    """Version compatible avec l'ancienne API (3 couleurs)"""
-    zone_cells = color_cells.get(color_palette['zone_color'], [])
-    label1_cells = color_cells.get(color_palette.get('label1_color'), [])
-    label2_cells = color_cells.get(color_palette.get('label2_color'), [])
-    
-    zones = group_contiguous_cells(zone_cells)
-    
-    for zone in zones:
-        zone['labels'] = find_labels_for_zone_simple(
-            zone, 
-            label1_cells + label2_cells, 
-            color_palette.get('label1_color'), 
-            color_palette.get('label2_color')
-        )
-    
-    return zones, {'label1': label1_cells, 'label2': label2_cells}
-
-def find_labels_for_zone_simple(zone: Dict, label_cells: List[Dict], label1_color: str, label2_color: str) -> List[Dict]:
-    """Trouve les labels associés à une zone (version simple)"""
-    labels = []
-    bounds = zone['bounds']
-    
-    for label in label_cells:
-        # Labels au-dessus de la zone
-        if (label['row'] == bounds['min_row'] - 1 and 
-            bounds['min_col'] <= label['col'] <= bounds['max_col']):
-            label_type = 'label1' if label.get('color', '') == label1_color else 'label2'
-            labels.append({
-                **label,
-                'position': 'top',
-                'type': label_type,
-                'direction': 'horizontal'
-            })
-        # Labels à gauche de la zone
-        elif (label['col'] == bounds['min_col'] - 1 and 
-              bounds['min_row'] <= label['row'] <= bounds['max_row']):
-            label_type = 'label1' if label.get('color', '') == label1_color else 'label2'
-            labels.append({
-                **label,
-                'position': 'left',
-                'type': label_type,
-                'direction': 'vertical'
-            })
-    
-    return labels
+    """
+    Fonction de compatibilité qui convertit l'ancien format "pairs" vers le nouveau format
+    """
+    # Si on a le format avec label_pairs, convertir vers le format direct
+    if 'label_pairs' in color_palette and len(color_palette['label_pairs']) >= 2:
+        new_palette = {
+            'zone_color': color_palette['zone_color'],
+            'zone_name': color_palette['zone_name'],
+            'h1_color': color_palette['label_pairs'][0]['horizontal']['color'],
+            'h1_name': color_palette['label_pairs'][0]['horizontal']['name'],
+            'h2_color': color_palette['label_pairs'][1]['horizontal']['color'],
+            'h2_name': color_palette['label_pairs'][1]['horizontal']['name'],
+            'v1_color': color_palette['label_pairs'][0]['vertical']['color'],
+            'v1_name': color_palette['label_pairs'][0]['vertical']['name'],
+            'v2_color': color_palette['label_pairs'][1]['vertical']['color'],
+            'v2_name': color_palette['label_pairs'][1]['vertical']['name']
+        }
+        return detect_zones_with_two_colors(workbook, sheet_name, new_palette, color_cells)
+    else:
+        # Utiliser directement si déjà au bon format
+        return detect_zones_with_two_colors(workbook, sheet_name, color_palette, color_cells)
