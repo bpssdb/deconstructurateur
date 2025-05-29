@@ -432,6 +432,7 @@ def configure_color_palette_pairs_global():
                 st.error("❌ Toutes les couleurs doivent être différentes !")
         else:
             st.error("❌ Veuillez sélectionner toutes les couleurs !")
+            
 def process_single_sheet(sheet_name):
     """Traite une seule feuille avec la palette globale - Version corrigée"""
     with st.spinner(f"Traitement de la feuille '{sheet_name}'..."):

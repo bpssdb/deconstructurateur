@@ -1,10 +1,148 @@
 """
 Module de détection et de groupement des zones dans les fichiers Excel
 Support des 4 couleurs de headers indépendantes (2 horizontaux, 2 verticaux)
+CORRECTION: V = vertical = au-dessus, H = horizontal = à gauche
 """
 
 from typing import List, Dict, Set, Tuple, Optional
 from collections import defaultdict
+
+def find_labels_for_zone_with_colors(zone: Dict, label_data: Dict) -> List[Dict]:
+    """
+    Trouve les labels pour une zone selon la logique des 4 couleurs:
+    - VERTICAL (V1/V2): on REMONTE dans la COLONNE (chercher au-dessus)
+    - HORIZONTAL (H1/H2): on RECULE dans la LIGNE (chercher à gauche)
+    """
+    labels = []
+    processed = set()
+    
+    # Créer des mappings position -> label pour un accès rapide
+    h_positions = {}  # Headers horizontaux (à gauche)
+    v_positions = {}  # Headers verticaux (au-dessus)
+    
+    # Mapper H1 (horizontal) - CORRECTION: créer une copie propre du dictionnaire
+    for cell in label_data.get('h1', {}).get('cells', []):
+        if isinstance(cell, dict) and 'row' in cell and 'col' in cell:
+            h_positions[(cell['row'], cell['col'])] = {
+                'row': cell['row'],
+                'col': cell['col'],
+                'value': cell.get('value', ''),
+                'type': 'h1',
+                'color': label_data['h1']['color'],
+                'direction': 'horizontal'
+            }
+    
+    # Mapper H2 (horizontal)
+    for cell in label_data.get('h2', {}).get('cells', []):
+        if isinstance(cell, dict) and 'row' in cell and 'col' in cell:
+            h_positions[(cell['row'], cell['col'])] = {
+                'row': cell['row'],
+                'col': cell['col'],
+                'value': cell.get('value', ''),
+                'type': 'h2',
+                'color': label_data['h2']['color'],
+                'direction': 'horizontal'
+            }
+    
+    # Mapper V1 (vertical)
+    for cell in label_data.get('v1', {}).get('cells', []):
+        if isinstance(cell, dict) and 'row' in cell and 'col' in cell:
+            v_positions[(cell['row'], cell['col'])] = {
+                'row': cell['row'],
+                'col': cell['col'],
+                'value': cell.get('value', ''),
+                'type': 'v1',
+                'color': label_data['v1']['color'],
+                'direction': 'vertical'
+            }
+    
+    # Mapper V2 (vertical)
+    for cell in label_data.get('v2', {}).get('cells', []):
+        if isinstance(cell, dict) and 'row' in cell and 'col' in cell:
+            v_positions[(cell['row'], cell['col'])] = {
+                'row': cell['row'],
+                'col': cell['col'],
+                'value': cell.get('value', ''),
+                'type': 'v2',
+                'color': label_data['v2']['color'],
+                'direction': 'vertical'
+            }
+    
+    print(f"\n  DEBUG find_labels: Zone {zone['id']}")
+    print(f"    - Zone bounds: rows {zone['bounds']['min_row']}-{zone['bounds']['max_row']}, cols {zone['bounds']['min_col']}-{zone['bounds']['max_col']}")
+    print(f"    - H positions mapped: {len(h_positions)} (horizontal - à gauche)")
+    print(f"    - V positions mapped: {len(v_positions)} (vertical - au-dessus)")
+    
+    # Pour chaque cellule de la zone
+    for zone_cell in zone['cells']:
+        zone_row = zone_cell['row']
+        zone_col = zone_cell['col']
+        
+        # 1. Chercher les headers VERTICAUX (remonter dans la COLONNE - au-dessus)
+        first_v_color = None
+        
+        for check_row in range(zone_row - 1, 0, -1):  # Remonter
+            if (check_row, zone_col) in v_positions:  # Même colonne
+                v_label = v_positions[(check_row, zone_col)]
+                current_color = v_label['color']
+                
+                # Si c'est le premier header V trouvé, on note sa couleur
+                if first_v_color is None:
+                    first_v_color = current_color
+                
+                # Si c'est la même couleur que le premier trouvé, on l'ajoute
+                if current_color == first_v_color:
+                    key = (v_label['row'], v_label['col'], 'vertical', v_label['type'])
+                    if key not in processed:
+                        labels.append({
+                            'row': v_label['row'],
+                            'col': v_label['col'],
+                            'value': str(v_label.get('value', '')),  # CORRECTION: forcer en string
+                            'type': v_label['type'],
+                            'position': 'top',
+                            'direction': 'vertical',
+                            'distance': zone_row - check_row,
+                            'color': v_label['color']
+                        })
+                        processed.add(key)
+                # Si c'est une couleur V différente, on arrête
+                else:
+                    break
+        
+        # 2. Chercher les headers HORIZONTAUX (reculer dans la LIGNE - à gauche)
+        first_h_color = None
+        
+        for check_col in range(zone_col - 1, 0, -1):  # Reculer
+            if (zone_row, check_col) in h_positions:  # Même ligne
+                h_label = h_positions[(zone_row, check_col)]
+                current_color = h_label['color']
+                
+                # Si c'est le premier header H trouvé, on note sa couleur
+                if first_h_color is None:
+                    first_h_color = current_color
+                
+                # Si c'est la même couleur que le premier trouvé, on l'ajoute
+                if current_color == first_h_color:
+                    key = (h_label['row'], h_label['col'], 'horizontal', h_label['type'])
+                    if key not in processed:
+                        labels.append({
+                            'row': h_label['row'],
+                            'col': h_label['col'],
+                            'value': str(h_label.get('value', '')),  # CORRECTION: forcer en string
+                            'type': h_label['type'],
+                            'position': 'left',
+                            'direction': 'horizontal',
+                            'distance': zone_col - check_col,
+                            'color': h_label['color']
+                        })
+                        processed.add(key)
+                # Si c'est une couleur H différente, on arrête
+                else:
+                    break
+    
+    print(f"\n  Total labels found for zone {zone['id']}: {len(labels)}")
+    return labels
+
 
 def detect_zones_with_two_colors(workbook, sheet_name: str, color_palette: Dict, color_cells: Dict) -> Tuple[List[Dict], Dict]:
     """
@@ -13,10 +151,10 @@ def detect_zones_with_two_colors(workbook, sheet_name: str, color_palette: Dict,
     color_palette format attendu:
     {
         'zone_color': 'RRGGBB',
-        'h1_color': 'RRGGBB',
-        'h2_color': 'RRGGBB', 
-        'v1_color': 'RRGGBB',
-        'v2_color': 'RRGGBB',
+        'h1_color': 'RRGGBB',  # Horizontal 1 (à gauche)
+        'h2_color': 'RRGGBB',  # Horizontal 2 (à gauche)
+        'v1_color': 'RRGGBB',  # Vertical 1 (au-dessus)
+        'v2_color': 'RRGGBB',  # Vertical 2 (au-dessus)
         ... (et les noms correspondants)
     }
     """
@@ -36,10 +174,10 @@ def detect_zones_with_two_colors(workbook, sheet_name: str, color_palette: Dict,
     
     print(f"DEBUG detect_zones_with_two_colors:")
     print(f"  - Zone cells: {len(zone_cells)}")
-    print(f"  - H1 cells ({h1_color}): {len(h1_cells)}")
-    print(f"  - H2 cells ({h2_color}): {len(h2_cells)}")
-    print(f"  - V1 cells ({v1_color}): {len(v1_cells)}")
-    print(f"  - V2 cells ({v2_color}): {len(v2_cells)}")
+    print(f"  - H1 cells ({h1_color}): {len(h1_cells)} (horizontal - à gauche)")
+    print(f"  - H2 cells ({h2_color}): {len(h2_cells)} (horizontal - à gauche)")
+    print(f"  - V1 cells ({v1_color}): {len(v1_cells)} (vertical - au-dessus)")
+    print(f"  - V2 cells ({v2_color}): {len(v2_cells)} (vertical - au-dessus)")
     
     # Grouper les cellules de zone en zones contiguës
     zones = group_contiguous_cells(zone_cells)
@@ -52,132 +190,16 @@ def detect_zones_with_two_colors(workbook, sheet_name: str, color_palette: Dict,
         'v2': {'cells': v2_cells, 'color': v2_color}
     }
     
-    # Associer les labels aux zones
+    # Associer les labels aux zones et ajouter le nom de la feuille
     for zone in zones:
         zone['labels'] = find_labels_for_zone_with_colors(zone, label_data)
+        
+        # Ajouter le nom de la feuille comme label
+        zone['sheet_name'] = sheet_name
+        
         print(f"  Zone {zone['id']}: {len(zone['labels'])} labels trouvés")
     
     return zones, label_data
-
-def find_labels_for_zone_with_colors(zone: Dict, label_data: Dict) -> List[Dict]:
-    """
-    Trouve les labels pour une zone selon la logique des 4 couleurs:
-    - Vertical: on remonte, on prend la première couleur H trouvée (H1 ou H2) 
-      et on continue avec cette couleur jusqu'à trouver l'autre couleur H
-    - Horizontal: on recule, on prend la première couleur V trouvée (V1 ou V2)
-      et on continue avec cette couleur jusqu'à trouver l'autre couleur V
-    """
-    labels = []
-    processed = set()
-    
-    # Créer des mappings position -> label pour un accès rapide
-    h_positions = {}  # Tous les headers horizontaux
-    v_positions = {}  # Tous les headers verticaux
-    
-    # Mapper H1
-    for cell in label_data['h1']['cells']:
-        h_positions[(cell['row'], cell['col'])] = {
-            **cell,
-            'type': 'h1',
-            'color': label_data['h1']['color'],
-            'direction': 'horizontal'
-        }
-    
-    # Mapper H2
-    for cell in label_data['h2']['cells']:
-        h_positions[(cell['row'], cell['col'])] = {
-            **cell,
-            'type': 'h2',
-            'color': label_data['h2']['color'],
-            'direction': 'horizontal'
-        }
-    
-    # Mapper V1
-    for cell in label_data['v1']['cells']:
-        v_positions[(cell['row'], cell['col'])] = {
-            **cell,
-            'type': 'v1',
-            'color': label_data['v1']['color'],
-            'direction': 'vertical'
-        }
-    
-    # Mapper V2
-    for cell in label_data['v2']['cells']:
-        v_positions[(cell['row'], cell['col'])] = {
-            **cell,
-            'type': 'v2',
-            'color': label_data['v2']['color'],
-            'direction': 'vertical'
-        }
-    
-    # Pour chaque cellule de la zone
-    for zone_cell in zone['cells']:
-        zone_row = zone_cell['row']
-        zone_col = zone_cell['col']
-        
-        # 1. Chercher les headers horizontaux (remonter dans la colonne)
-        first_h_color = None
-        
-        for check_row in range(zone_row - 1, 0, -1):
-            if (check_row, zone_col) in h_positions:
-                h_label = h_positions[(check_row, zone_col)]
-                current_color = h_label['color']
-                
-                # Si c'est le premier header H trouvé, on note sa couleur
-                if first_h_color is None:
-                    first_h_color = current_color
-                
-                # Si c'est la même couleur que le premier trouvé, on l'ajoute
-                if current_color == first_h_color:
-                    key = (h_label['row'], h_label['col'], 'horizontal', h_label['type'])
-                    if key not in processed:
-                        labels.append({
-                            'row': h_label['row'],
-                            'col': h_label['col'],
-                            'value': h_label.get('value', ''),
-                            'type': h_label['type'],
-                            'position': 'top',
-                            'direction': 'horizontal',
-                            'distance': zone_row - check_row,
-                            'color': h_label['color']
-                        })
-                        processed.add(key)
-                # Si c'est une couleur H différente, on arrête
-                else:
-                    break
-        
-        # 2. Chercher les headers verticaux (reculer dans la ligne)
-        first_v_color = None
-        
-        for check_col in range(zone_col - 1, 0, -1):
-            if (zone_row, check_col) in v_positions:
-                v_label = v_positions[(zone_row, check_col)]
-                current_color = v_label['color']
-                
-                # Si c'est le premier header V trouvé, on note sa couleur
-                if first_v_color is None:
-                    first_v_color = current_color
-                
-                # Si c'est la même couleur que le premier trouvé, on l'ajoute
-                if current_color == first_v_color:
-                    key = (v_label['row'], v_label['col'], 'vertical', v_label['type'])
-                    if key not in processed:
-                        labels.append({
-                            'row': v_label['row'],
-                            'col': v_label['col'],
-                            'value': v_label.get('value', ''),
-                            'type': v_label['type'],
-                            'position': 'left',
-                            'direction': 'vertical',
-                            'distance': zone_col - check_col,
-                            'color': v_label['color']
-                        })
-                        processed.add(key)
-                # Si c'est une couleur V différente, on arrête
-                else:
-                    break
-    
-    return labels
 
 def group_contiguous_cells(cells: List[Dict]) -> List[Dict]:
     """
@@ -258,7 +280,8 @@ def merge_zones(zones: List[Dict], max_gap: int = 1) -> List[Dict]:
             'id': len(merged) + 1,
             'cells': zone1['cells'][:],
             'bounds': zone1['bounds'].copy(),
-            'labels': zone1.get('labels', [])
+            'labels': zone1.get('labels', []),
+            'sheet_name': zone1.get('sheet_name', '')  # Conserver le nom de la feuille
         }
         
         # Chercher les zones à fusionner
